@@ -1,0 +1,25 @@
+character_design:
+  values:
+    positive prompt:
+      type: string
+      value: A beautiful landscape with mountains and lakes
+    ' negative prompt':
+      type: string
+      value: text, watermark
+    steps:
+      type: int
+      value: '22'
+    cfg:
+      type: float
+      value: '4.55'
+simple_prompt:
+  values:
+    prompt:
+      type: string
+      value: A beautiful landscape with mountains and lakes
+    steps:
+      type: int
+      value: '25'
+    cfg:
+      type: float
+      value: '5.1'
