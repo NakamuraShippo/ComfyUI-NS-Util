@@ -2,6 +2,12 @@
 
 ComfyUI用のノード集です。
 
+
+## ノードの内容
+
+### NS-FlexPresetノード
+int float stringのパラメーターをプリセットで一括管理するノード
+
 ## インストール
 
 ### [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager)をインストールしている場合
@@ -15,7 +21,10 @@ ComfyUI用のノード集です。
 2. このリポジトリをクローンします。  
 `git clone https://github.com/NakamuraShippo/ComfyUI-NS-Util`
 3. ComfyUIを再起動します。
-4. ComfyUI\venv\ScriptsでShift+右クリック→ターミナルで開く -> activateと入力
+4. ComfyUI\venv\ScriptsでShift+右クリック→ターミナルで開く -> activate
+  ```python
+pip install pyyaml watchdog
+  ```
 
 ## 使い方
 
@@ -83,6 +92,9 @@ ComfyUI用のノード集です。
  - [ManySliders](https://github.com/NakamuraShippo/ComfyUI-NS-ManySliders)
    - プリセットで切り替えられるように作り直してから追加します
 
+## コントリビューション
+
+コントリビューションを歓迎します！プルリクエストの提出やバグ・機能リクエストのイシュー作成をお気軽にどうぞ。
 
 ## ライセンス
 
