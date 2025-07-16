@@ -10,6 +10,8 @@ This consolidates the previously created nodes into one package.
 ### NS-FlexPreset Node
 A node for batch managing int, float, and string parameters with presets
 
+https://github.com/user-attachments/assets/6f3b1707-642a-407c-90de-5870f4e010a5
+
 ## Installation
 
 ### If you have [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager) installed
