@@ -8,6 +8,10 @@ ComfyUI用のノード集です。
 ### NS-FlexPresetノード
 int float stringのパラメーターをプリセットで一括管理するノード
 
+
+https://github.com/user-attachments/assets/17fd46d7-cb1c-4e81-abe8-3d86d2feeb0b
+
+
 ## インストール
 
 ### [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager)をインストールしている場合
