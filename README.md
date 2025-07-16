@@ -1,4 +1,5 @@
 # ComfyUI-NS-Util
+[日本語README](https://github.com/NakamuraShippo/ComfyUI-NS-Util/blob/main/README_JP.md)
 
 A collection of nodes for ComfyUI.
 
