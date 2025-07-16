@@ -1,0 +1,13 @@
+[project]
+name = "comfyui-ns-util"
+description = "A collection of nodes for ComfyUI. ex:A node for batch managing int, float, and string parameters with presets"
+version = "0.1.0"
+license = { file = "LICENSE.txt" }
+
+[project.urls]
+Repository = "https://github.com/NakamuraShippo/ComfyUI-NS-Util"
+
+[tool.comfy]
+PublisherId = "nakamurashippo"
+DisplayName = "ComfyUI-NS-Util"
+Icon = ""
