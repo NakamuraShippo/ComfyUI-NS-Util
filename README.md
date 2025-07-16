@@ -1,5 +1,5 @@
 # ComfyUI-NS-Util
-
+[日本語README]()
 A collection of nodes for ComfyUI.
 
 This consolidates the previously created nodes into one package.
