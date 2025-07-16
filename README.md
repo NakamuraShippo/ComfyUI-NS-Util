@@ -1,5 +1,6 @@
 # ComfyUI-NS-Util
-[日本語README]()
+[日本語README](https://github.com/NakamuraShippo/ComfyUI-NS-Util/blob/main/README_JP.md)
+
 A collection of nodes for ComfyUI.
 
 This consolidates the previously created nodes into one package.
