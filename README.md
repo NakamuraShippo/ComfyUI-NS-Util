@@ -29,6 +29,10 @@ A node for batch managing int, float, and string parameters with presets
   ```python
 pip install pyyaml watchdog
   ```
+## Usage
+Each node page of the wiki is written in both Japanese and English.
+
+[wiki](https://github.com/NakamuraShippo/ComfyUI-NS-Util/wiki)
 
 ## Requirements
 
