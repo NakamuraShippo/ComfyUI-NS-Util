@@ -122,7 +122,7 @@ class NS_PromptList:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("prompt",)
     FUNCTION = "run"
-    CATEGORY = "NS"  # FlexPresetと同じカテゴリを使用
+    CATEGORY = "NS/Utility"  # FlexPresetと同じカテゴリを使用
     
     @classmethod
     def _get_instance(cls):
@@ -377,4 +377,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 }
 
 # Initialize instance on import
+
 get_instance()
