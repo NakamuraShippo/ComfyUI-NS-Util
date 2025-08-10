@@ -22,7 +22,7 @@ class NS_ToonFilter:
         }
 
     RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "apply_TOonFilter"
+    FUNCTION = "apply_toon_filter"
     CATEGORY = "NS/Filter"
 
     def apply_toon_filter(self, image, num_colors, bilateral_d, sigma_color, sigma_space, blur_ksize, block_size, c):

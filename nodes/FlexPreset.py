@@ -279,7 +279,7 @@ class NS_FlexPreset:
         return (outputs, output_names)
     
     FUNCTION = "run"
-    CATEGORY = "NS"
+    CATEGORY = "NS/Utility"
     
     @classmethod
     def _get_instance(cls):
