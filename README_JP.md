@@ -25,58 +25,9 @@ int float stringのパラメーターをプリセットで一括管理するノ�
   ```python
 pip install pyyaml watchdog
   ```
-
 ## 使い方
-
-### NS-FlexPresetノード
-
-1. **ノードを追加**: ノードメニューの「NS」カテゴリから「NS Flex Preset」を探す
-
-2. **YAMLプリセットの作成/編集**:
-   - YAMLファイルは `ComfyUI/custom_nodes/ComfyUI-NS-Util/nodes/presets/` に保存されます
-   - YAML構造の例：
-   ```yaml
-    positive prompt:
-      type: string
-      value: daytime sky nature dark blue galaxy bottle
-    negative prompt:
-      type: string
-      value: text, watermark
-    steps:
-      type: int
-      value: '22'
-    cfg:
-      type: float
-      value: '4.55'
-   ```
-
-3. **ComfyUIでの使用**:
-   - select_yamlからYAMLファイルを選択
-   - select_presetを選択または入力
-   - ノードは各値に対して型付き出力ポートを自動作成
-   - これらの出力をワークフローの他のノードに接続
-
-4. **UI内での値の編集**:
-   - 「Add Value」をクリックして新しいプリセット値を作成
-   - ノード上で直接値を変更
-     - int floatの場合は入力ウィジェットがスライダーになっていて、クリックすると入力、左右にドラッグして値が調整できます
-   - 値の削除方法
-     - select_valueでキー名を選択 -> Delete [キー名]ボタンをクリック
-     - Nameを重複させた場合も最後に入力した値を残して削除されます
-   - すべての変更はYAMLファイルに自動保存
-   - YAMLを直接編集してもOKです
-     - ComfyUI起動中に編集した場合は、プリセットを切り替えるかブラウザの更新をしてください
-
-## ノードインターフェース
-
-- **select_yaml**: 利用可能なYAMLファイルから選択
-- **select_title**: 選択したYAML内の既存プリセットタイトルから選択
-- **input_title**: カスタムタイトルを入力（存在しない場合は新規作成）
-- **値パネル**: 各プリセット値を表示・編集：
-  - 名前（編集可能）
-  - 型セレクター（int/float/string）
-  - 値入力フィールド
-- **追加/削除ボタン**: プリセット値の管理
+wikiの各ノードページに日本語と英語を併記しました。
+[wiki](https://github.com/NakamuraShippo/ComfyUI-NS-Util/wiki)
 
 ## 必要要件
 
