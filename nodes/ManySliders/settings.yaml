@@ -1,0 +1,6 @@
+sliders:
+  count: 15
+  min_value: -1.0
+  max_value: 1.0
+  default_value: 0.0
+  step: 0.1
