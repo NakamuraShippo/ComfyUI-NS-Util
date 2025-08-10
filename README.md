@@ -5,12 +5,12 @@ A collection of nodes for ComfyUI.
 
 This consolidates the previously created nodes into one package.
 
+[Please see the wiki for an explanation of each node.](https://github.com/NakamuraShippo/ComfyUI-NS-Util/wiki)
+
 ## Node Contents
 
 ### NS-FlexPreset Node
 A node for batch managing int, float, and string parameters with presets
-
-https://github.com/user-attachments/assets/6f3b1707-642a-407c-90de-5870f4e010a5
 
 ## Installation
 
@@ -30,58 +30,6 @@ https://github.com/user-attachments/assets/6f3b1707-642a-407c-90de-5870f4e010a5
 pip install pyyaml watchdog
   ```
 
-## Usage
-
-### NS-FlexPreset Node
-
-1. **Add Node**: Find "NS Flex Preset" in the "NS" category of the node menu
-
-2. **Create/Edit YAML Presets**:
-   - YAML files are saved in `ComfyUI/custom_nodes/ComfyUI-NS-Util/nodes/presets/`
-   - Example YAML structure:
-   ```yaml
-    positive prompt:
-      type: string
-      value: daytime sky nature dark blue galaxy bottle
-    negative prompt:
-      type: string
-      value: text, watermark
-    steps:
-      type: int
-      value: '22'
-    cfg:
-      type: float
-      value: '4.55'
-   ```
-
-3. **Using in ComfyUI**:
-   - Select a YAML file from select_yaml
-   - Select or enter select_preset
-   - The node automatically creates typed output ports for each value
-   - Connect these outputs to other nodes in your workflow
-
-4. **Editing Values in UI**:
-   - Click "Add Value" to create new preset values
-   - Change values directly on the node
-     - For int/float, the input widget becomes a slider - click to input, drag left/right to adjust values
-   - How to delete values:
-     - Select key name in select_value -> Click Delete [key name] button
-     - If Names are duplicated, the last entered value is kept and others are deleted
-   - All changes are automatically saved to the YAML file
-   - You can also edit YAML directly
-     - If edited while ComfyUI is running, switch presets or refresh the browser
-
-## Node Interface
-
-- **select_yaml**: Choose from available YAML files
-- **select_title**: Choose from existing preset titles in the selected YAML
-- **input_title**: Input custom title (creates new if doesn't exist)
-- **Value Panel**: Display and edit each preset value:
-  - Name (editable)
-  - Type selector (int/float/string)
-  - Value input field
-- **Add/Delete Buttons**: Manage preset values
-
 ## Requirements
 
 - ComfyUI (0.3 or later recommended, other versions not tested)
@@ -89,6 +37,7 @@ pip install pyyaml watchdog
   - pyyaml
   - watchdog
   - aiohttp
+  - opencv-python
 
 ## Roadmap
 
