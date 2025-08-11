@@ -12,14 +12,26 @@ character_design:
     cfg:
       type: float
       value: '4.55'
-simple_prompt:
+NS_Toon_Filter:
   values:
-    prompt:
-      type: string
-      value: A beautiful landscape with mountains and lakes
-    steps:
+    num_colors:
       type: int
-      value: '25'
-    cfg:
-      type: float
-      value: '5.1'
+      value: 16
+    bilateral_d:
+      type: int
+      value: 9
+    sigma_color:
+      type: int
+      value: 75
+    sigma_space:
+      type: int
+      value: 75
+    blur_ksize:
+      type: int
+      value: 7
+    block_size:
+      type: int
+      value: 9
+    c:
+      type: int
+      value: 2

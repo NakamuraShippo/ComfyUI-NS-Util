@@ -183,19 +183,10 @@ class NS_FlexPreset:
         # Get instance to access panel order
         instance = cls._get_instance() if hasattr(cls, '_get_instance') else None
         
-        # # ワークフローロード時の初期化チェック
-        # if instance and hasattr(instance, '_initial_load_pending'):
-        #     if instance._initial_load_pending:
-        #         instance._initial_load_pending = False
-        #         # 強制的にリフレッシュ
-        #         instance.refresh_enums()
-        
         if not title_to_use or not select_yaml:
             if instance and instance._workflow_loading:
-                # ワークフローロード中は空の配列を返す
                 return ([], [])
             else:
-                # 通常時はデフォルト値を返す
                 if instance:
                     instance._dynamic_output_types = ["STRING"]
                     instance._dynamic_output_names = ["output"]
@@ -208,12 +199,10 @@ class NS_FlexPreset:
         yaml_path = presets_dir / select_yaml
         
         if not yaml_path.exists():
-            # B2: Update instance if available
             if instance:
                 instance._dynamic_output_types = ["STRING"]
                 instance._dynamic_output_names = ["output"]
                 instance._panel_order = []
-            # C2: Update class-level RETURN_TYPES
             cls.RETURN_TYPES = ("STRING",)
             cls.RETURN_NAMES = ("output",)
             return (["STRING"], ["output"])
@@ -225,24 +214,33 @@ class NS_FlexPreset:
             if title_to_use in data and isinstance(data[title_to_use], dict):
                 values = data[title_to_use].get('values', {})
                 
-                # C3: Use panel order if available, otherwise use YAML order
+                # ★重要: プリセット切り替え時の処理を改善
+                current_keys = set(values.keys())
+                
                 if instance and instance._panel_order:
-                    # Use UI panel order for consistency
-                    keys_to_process = []
-                    for panel_key in instance._panel_order:
-                        if panel_key in values:
-                            keys_to_process.append(panel_key)
-                    # Add any missing keys from YAML
-                    for key in values.keys():
-                        if key not in keys_to_process:
-                            keys_to_process.append(key)
+                    # panel_orderから現在のプリセットに存在しないキーを除外
+                    valid_panel_keys = [k for k in instance._panel_order if k in current_keys]
+                    
+                    # panel_orderが空、または全てのキーが無効な場合はYAMLの順序を使用
+                    if not valid_panel_keys:
+                        keys_to_process = list(values.keys())
+                        instance._panel_order = keys_to_process.copy()
+                    else:
+                        # 有効なキーのみを使用し、新しいキーを追加
+                        keys_to_process = valid_panel_keys.copy()
+                        for key in values.keys():
+                            if key not in keys_to_process:
+                                keys_to_process.append(key)
+                        instance._panel_order = keys_to_process.copy()
                 else:
-                    # Fallback to YAML order
+                    # panel_orderがない場合はYAMLの順序を使用
                     keys_to_process = list(values.keys())
+                    if instance:
+                        instance._panel_order = keys_to_process.copy()
                 
                 # Process keys in determined order
                 for key in keys_to_process:
-                    if key in values:
+                    if key in values:  # 再度確認
                         value_data = values[key]
                         if isinstance(value_data, dict):
                             value_type = value_data.get('type', 'string')
@@ -267,12 +265,11 @@ class NS_FlexPreset:
             outputs = ["STRING"]
             output_names = ["output"]
         
-        # B2/C2: Store dynamic types in instance and update RETURN_TYPES
+        # Store dynamic types in instance and update RETURN_TYPES
         if instance:
             instance._dynamic_output_types = outputs.copy()
             instance._dynamic_output_names = output_names.copy()
         
-        # C2: Always update class-level RETURN_TYPES
         cls.RETURN_TYPES = tuple(outputs)
         cls.RETURN_NAMES = tuple(output_names)
         
@@ -420,17 +417,24 @@ class NS_FlexPreset:
             if init_outputs:
                 instance._workflow_loading = True
                 instance._initial_load_pending = False
-                # 強制的にenumをリフレッシュ
                 instance.refresh_enums()
+            
+            # ★追加: プリセット切り替え時はpanel_orderをクリア
+            response_data = instance._get_prompt_data(yaml_file, title)
+            
+            # panel_orderを新しいプリセットのキーでリセット
+            if response_data.get("keys_order"):
+                instance._panel_order = response_data["keys_order"].copy()
+            else:
+                instance._panel_order = []
             
             # Force refresh dynamic outputs
             outputs, names = instance.__class__.dynamic_output_types(yaml_file, title, title)
             
-            response_data = instance._get_prompt_data(yaml_file, title)
             response_data["refresh_outputs"] = True
             response_data["node_id"] = node_id
-            response_data["outputs"] = outputs  # 追加：出力タイプを含める
-            response_data["output_names"] = names  # 追加：出力名を含める
+            response_data["outputs"] = outputs
+            response_data["output_names"] = names
             
             # ワークフローロードフラグをリセット
             if init_outputs:
@@ -607,10 +611,13 @@ class NS_FlexPreset:
             # 順序を保持するために、キーのリストも送信
             keys_order = list(values.keys()) if values else []
             
+            # プリセット変更時はpanel_orderをリセット
+            self._panel_order = keys_order.copy()  # ★追加
+            
             return {
                 "title": title, 
                 "values": values,
-                "keys_order": keys_order  # 追加：キーの順序情報
+                "keys_order": keys_order
             }
         except Exception as e:
             print(f"Error reading prompt: {e}")

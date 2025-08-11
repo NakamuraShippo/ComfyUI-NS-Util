@@ -70,8 +70,9 @@ app.registerExtension({
             btn_add_value: null,
             btn_del_value: null,
             outputs_signature: "",
-            user_resized: false,  // Track if user manually resized
-            textareas: []  // Track textareas for cleanup
+            user_resized: false,
+            textareas: [],
+            panel_order: []  // ★追加: panel_orderを初期化
         };
         
         // Find existing widgets
@@ -368,6 +369,9 @@ function setupWidgetHandlers(node) {
         node._nsFlexPresetWidgets.select_preset.callback = function(v) {
             if (origCallback) origCallback.call(this, v);
             
+            // ★追加: プリセット切り替え時にpanel_orderをクリア
+            node._nsFlexPresetWidgets.panel_order = [];
+            
             // Update input_preset_name to match selection
             if (node._nsFlexPresetWidgets.input_preset_name && node._nsFlexPresetWidgets.input_preset_name.value !== v) {
                 node._nsFlexPresetWidgets.input_preset_name.value = v;
@@ -383,6 +387,9 @@ function setupWidgetHandlers(node) {
         const origCallback = node._nsFlexPresetWidgets.input_preset_name.callback;
         node._nsFlexPresetWidgets.input_preset_name.callback = function(v) {
             if (origCallback) origCallback.call(this, v);
+            
+            // ★追加: プリセット切り替え時にpanel_orderをクリア
+            node._nsFlexPresetWidgets.panel_order = [];
             
             // Update select_preset if the value exists in options
             if (node._nsFlexPresetWidgets.select_preset) {
@@ -563,6 +570,12 @@ function updateNodeWidgets(data) {
         // Clear existing value panels properly
         clearValuePanels(node);
         
+        // ★追加: keys_orderがある場合はpanel_orderをリセット
+        if (data.keys_order && data.keys_order.length > 0) {
+            // 新しいプリセットの順序でpanel_orderを初期化
+            node._nsFlexPresetWidgets.panel_order = data.keys_order.slice();
+        }
+        
         // Add value panels for each value
         if (data.values) {
             let keysToProcess = [];
@@ -582,6 +595,9 @@ function updateNodeWidgets(data) {
                 }
             }
         }
+        
+        // ★修正: panel_orderを送信する前に、実際のパネル順序と同期
+        node._nsFlexPresetWidgets.panel_order = node._nsFlexPresetWidgets.value_panels.map(p => p.key);
         
         // Send panel order after creating all panels
         sendPanelOrder(node);
@@ -953,6 +969,9 @@ function addValuePanel(node) {
 async function loadPromptData(node) {
     const yamlFile = node._nsFlexPresetWidgets.select_yaml?.value;
     const title = node._nsFlexPresetWidgets.input_preset_name?.value || node._nsFlexPresetWidgets.select_preset?.value;
+    
+    // ★追加: プリセット変更時はpanel_orderをクリア
+    node._nsFlexPresetWidgets.panel_order = [];
     
     if (!yamlFile || !title) {
         clearValuePanels(node);
