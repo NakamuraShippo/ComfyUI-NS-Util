@@ -208,3 +208,6 @@ __marimo__/
 
 # Util
 nodes/preset
+nodes/promptlistYAML
+nodes/ManySliders
+nodes/LLM
