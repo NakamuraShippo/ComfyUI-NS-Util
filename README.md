@@ -9,8 +9,22 @@ This consolidates the previously created nodes into one package.
 
 ## Node Contents
 
-### NS-FlexPreset Node
-A node for batch managing int, float, and string parameters with presets
+### Utility
+- FlexPreset
+- PromptList
+- ManySlider
+- MergeText
+- DisplayText(soon)
+- StringViewer(soon)
+### Graphics Filter
+- ToonFilter
+- AlbedoFilter
+### LLM(Implementing the tests now.)
+- Agent (OpenAIAPI Ollama AnthropicAPI GoogleGeminiAPI)
+- Vector Store
+- RAG Query
+- Add Document
+- Image Description
 
 ## Installation
 
