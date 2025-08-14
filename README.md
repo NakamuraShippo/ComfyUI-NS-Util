@@ -10,21 +10,11 @@ This consolidates the previously created nodes into one package.
 ## Node Contents
 
 ### Utility
-- FlexPreset
-- PromptList
-- ManySlider
-- MergeText
-- DisplayText(soon)
-- StringViewer(soon)
+Contains useful nodes.
 ### Graphics Filter
-- ToonFilter
-- AlbedoFilter
+A filter that applies special effects to images.
 ### LLM(Implementing the tests now.)
-- Agent (OpenAIAPI Ollama AnthropicAPI GoogleGeminiAPI)
-- Vector Store
-- RAG Query
-- Add Document
-- Image Description
+Functions for connecting to and interacting with external LLM services. Local LLM supports Ollama.
 
 ## Installation
 
