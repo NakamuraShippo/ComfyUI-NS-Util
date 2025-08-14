@@ -4,9 +4,9 @@ ComfyUI用のノード集です。
 
 
 ## ノードの内容
-
-### NS-FlexPresetノード
-int float stringのパラメーターをプリセットで一括管理するノード
+### Utility あると便利なノードを用意
+### Graphics Filter 特殊効果を画像に適用するフィルターです
+### LLM(テスト実装中、近い内にwikiに使い方を記述します) 外部LLMサービスに接続してやりとりする機能群、ローカルLLMはOllamaに対応します
 
 ## インストール
 
