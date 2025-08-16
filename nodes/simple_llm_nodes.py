@@ -489,40 +489,6 @@ class SimpleLLMMergeText:
         
         return (merged,)
 
-class SimpleLLMDisplayText:
-    """テキストを表示"""
-    
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "text": ("STRING", {"forceInput": True}),
-            }
-        }
-    
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("text",)
-    OUTPUT_NODE = True
-    FUNCTION = "display_text"
-    CATEGORY = "NS/LLM/Output"
-    
-    def display_text(self, text):
-        if text is None:
-            text = ""
-        else:
-            text = str(text)
-        
-        print("\n" + "="*50)
-        print("SimpleLLM Display Text:")
-        print("-"*50)
-        display_text = text[:500] if len(text) > 500 else text
-        print(display_text)
-        if len(text) > 500:
-            print(f"... (truncated, total length: {len(text)} characters)")
-        print("="*50 + "\n")
-        
-        return {"ui": {"text": [text]}, "result": (text,)}
-
 class SimpleLLMStringViewer:
     """String内容を確認・パススルー"""
     
