@@ -1,0 +1,1014 @@
+{
+  "id": "6e64d03a-5870-472c-bdcd-d929fdcc8bbf",
+  "revision": 0,
+  "last_node_id": 42,
+  "last_link_id": 40,
+  "nodes": [
+    {
+      "id": 24,
+      "type": "PreviewAny",
+      "pos": [
+        968.992919921875,
+        500.39178466796875
+      ],
+      "size": [
+        327.48284912109375,
+        177.1318359375
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 18
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 31,
+      "type": "VAEDecode",
+      "pos": [
+        2068.3330078125,
+        -646.8829345703125
+      ],
+      "size": [
+        140,
+        46
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 28
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 29
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            30
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "VAEDecode"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 32,
+      "type": "VAELoader",
+      "pos": [
+        1813.9854736328125,
+        -132.2701416015625
+      ],
+      "size": [
+        210,
+        58
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            29
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "sdxl_vae.safetensors"
+      ]
+    },
+    {
+      "id": 30,
+      "type": "CLIPTextEncode",
+      "pos": [
+        1498.5101318359375,
+        -527.1774291992188
+      ],
+      "size": [
+        400,
+        201.03543090820312
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 25
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            27
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 34,
+      "type": "EmptyLatentImage",
+      "pos": [
+        1486.8741455078125,
+        -477.3387145996094
+      ],
+      "size": [
+        210,
+        106
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            31
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "EmptyLatentImage"
+      },
+      "widgets_values": [
+        1024,
+        1024,
+        1
+      ]
+    },
+    {
+      "id": 26,
+      "type": "CheckpointLoaderSimple",
+      "pos": [
+        949.2171630859375,
+        -650.283447265625
+      ],
+      "size": [
+        270,
+        98
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            20
+          ]
+        },
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            23
+          ]
+        },
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "CheckpointLoaderSimple"
+      },
+      "widgets_values": [
+        "XL Lightning\\dreamshaperXL_lightningDPMSDE.safetensors"
+      ]
+    },
+    {
+      "id": 27,
+      "type": "KSampler",
+      "pos": [
+        1769.9017333984375,
+        -647.1771240234375
+      ],
+      "size": [
+        270,
+        474
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 20
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 21
+        },
+        {
+          "name": "negative",
+          "type": "CONDITIONING",
+          "link": 27
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 31
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            28
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "KSampler"
+      },
+      "widgets_values": [
+        1031519403088150,
+        "randomize",
+        7,
+        1,
+        "dpmpp_2m_sde_gpu",
+        "karras",
+        1
+      ]
+    },
+    {
+      "id": 29,
+      "type": "CLIPSetLastLayer",
+      "pos": [
+        1246.4395751953125,
+        -592.3545532226562
+      ],
+      "size": [
+        210,
+        58
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 23
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            24,
+            25
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "CLIPSetLastLayer"
+      },
+      "widgets_values": [
+        -1
+      ]
+    },
+    {
+      "id": 37,
+      "type": "SimpleLLMConfigClaude",
+      "pos": [
+        -34.36719512939453,
+        669.361328125
+      ],
+      "size": [
+        270.3199157714844,
+        130
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LLM_CONFIG",
+          "type": "LLM_CONFIG",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-ns-util",
+        "ver": "0.2.0",
+        "Node name for S&R": "SimpleLLMConfigClaude"
+      },
+      "widgets_values": [
+        "claude-3-sonnet-20240229",
+        0.7,
+        1000,
+        ""
+      ]
+    },
+    {
+      "id": 38,
+      "type": "SimpleLLMConfigGemini",
+      "pos": [
+        -31.26088523864746,
+        838.136962890625
+      ],
+      "size": [
+        270.2994079589844,
+        130
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LLM_CONFIG",
+          "type": "LLM_CONFIG",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-ns-util",
+        "ver": "0.2.0",
+        "Node name for S&R": "SimpleLLMConfigGemini"
+      },
+      "widgets_values": [
+        "gemini-pro",
+        0.7,
+        1000,
+        ""
+      ]
+    },
+    {
+      "id": 39,
+      "type": "SimpleLLMConfigOllama",
+      "pos": [
+        -29.189992904663086,
+        1010.019287109375
+      ],
+      "size": [
+        270.2994079589844,
+        106
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LLM_CONFIG",
+          "type": "LLM_CONFIG",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-ns-util",
+        "ver": "0.2.0",
+        "Node name for S&R": "SimpleLLMConfigOllama"
+      },
+      "widgets_values": [
+        "llama3",
+        "http://localhost:11434",
+        0.7
+      ]
+    },
+    {
+      "id": 1,
+      "type": "SimpleLLMConfigOpenAI",
+      "pos": [
+        -33.64042663574219,
+        487.6644592285156
+      ],
+      "size": [
+        265.2019958496094,
+        143.4606475830078
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "LLM_CONFIG",
+          "type": "LLM_CONFIG",
+          "slot_index": 0,
+          "links": [
+            1
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-ns-util",
+        "ver": "e498605fdce0ff429bb6154cc0d94d0771b7666b",
+        "Node name for S&R": "SimpleLLMConfigOpenAI",
+        "widget_ue_connectable": {}
+      },
+      "widgets_values": [
+        "gpt-4o",
+        1,
+        201,
+        ""
+      ]
+    },
+    {
+      "id": 2,
+      "type": "SimpleLLMAgent",
+      "pos": [
+        262.0274658203125,
+        448.06048583984375
+      ],
+      "size": [
+        400,
+        120
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "config",
+          "type": "LLM_CONFIG",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "AGENT",
+          "type": "AGENT",
+          "slot_index": 0,
+          "links": [
+            2
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-ns-util",
+        "ver": "e498605fdce0ff429bb6154cc0d94d0771b7666b",
+        "Node name for S&R": "SimpleLLMAgent",
+        "widget_ue_connectable": {}
+      },
+      "widgets_values": [
+        "Stable Diffusion Prompt Generation Specialist\nYou are an expert prompt generator specialized in creating effective prompts for Stable Diffusion. Transform given concepts into high-quality prompts that generate stunning images.\nEssential Rules\n\nWord Limit: 75-150 words (optimal range for SD1.5/XL)\nComma Separation: Clearly separate each element with commas\nPriority Order: Place most important elements at the beginning\nSpecificity Focus: Avoid abstract expressions, use concrete visual descriptions\n\nPrompt Structure Template\n[Detailed main subject], [style/quality specifications], [environment/background], [lighting/color tone], [composition/perspective], [mood/atmosphere], [technical quality tags]\nEffective Keyword Examples\nStyle Specifications (High Priority)\n\nmasterpiece, best quality, ultra detailed\nphotorealistic, hyperrealistic, 8k uhd\ndigital art, concept art, illustration\nstudio ghibli style, anime style, manga style\noil painting, watercolor, pencil sketch\n\nComposition & Technical\n\nportrait, full body, close-up, wide shot\ndynamic pose, action shot, serene pose\ndramatic lighting, soft lighting, rim lighting\ndepth of field, bokeh, sharp focus\ncinematic composition, rule of thirds\n\nQuality Enhancement Tags\n\ntrending on artstation, featured on pixiv\naward winning photography\nprofessional lighting, studio quality\nintricate details, fine textures\n\nElements to Avoid\n\n❌ Overly long sentences (exceeding 150 words)\n❌ Negative expressions (\"not\", \"without\", etc.)\n❌ Vague adjectives (\"beautiful\", \"amazing\", etc.)\n❌ Complex grammatical structures\n❌ Specific copyrighted work titles\n\nOutput Example\nInput: \"magical girl witch in forest\"\nOutput: magical girl witch in enchanted forest, long flowing silver hair, mystical blue robes, holding glowing staff, masterpiece best quality ultra detailed, fantasy art digital painting, sunbeams through ancient trees, ethereal atmosphere, soft magical lighting, portrait composition, anime style studio ghibli, trending on artstation, 8k resolution\nSpecial Instructions\n\nAlways output English prompts regardless of input language\nPosition keywords based on importance priority\nAlways include technical quality tags\nSpecify style clearly\nOutput only the prompt without explanatory text"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "SimpleLLMTextInput",
+      "pos": [
+        264.74090576171875,
+        613.0756225585938
+      ],
+      "size": [
+        400,
+        180
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": [
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-ns-util",
+        "ver": "e498605fdce0ff429bb6154cc0d94d0771b7666b",
+        "Node name for S&R": "SimpleLLMTextInput",
+        "widget_ue_connectable": {}
+      },
+      "widgets_values": [
+        "とても綺麗な指輪、魔法の力が宿っている"
+      ]
+    },
+    {
+      "id": 28,
+      "type": "CLIPTextEncode",
+      "pos": [
+        1496.439208984375,
+        -574.7523193359375
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {
+        "collapsed": true
+      },
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 24
+        },
+        {
+          "name": "text",
+          "type": "STRING",
+          "widget": {
+            "name": "text"
+          },
+          "link": 39
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            21
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 4,
+      "type": "SimpleLLMRunPrompt",
+      "pos": [
+        685.4813842773438,
+        501.0251159667969
+      ],
+      "size": [
+        210,
+        88
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "agent",
+          "type": "AGENT",
+          "link": 2
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 3
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "slot_index": 0,
+          "links": [
+            18,
+            37
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-ns-util",
+        "ver": "e498605fdce0ff429bb6154cc0d94d0771b7666b",
+        "Node name for S&R": "SimpleLLMRunPrompt",
+        "widget_ue_connectable": {
+          "prompt": true
+        }
+      },
+      "widgets_values": [
+        ""
+      ]
+    },
+    {
+      "id": 40,
+      "type": "SimpleLLMMergeText",
+      "pos": [
+        962.4939575195312,
+        55.95574188232422
+      ],
+      "size": [
+        400,
+        274
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text1",
+          "type": "STRING",
+          "widget": {
+            "name": "text1"
+          },
+          "link": 40
+        },
+        {
+          "name": "text2",
+          "shape": 7,
+          "type": "STRING",
+          "widget": {
+            "name": "text2"
+          },
+          "link": 37
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            39
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-ns-util",
+        "ver": "0.2.0",
+        "Node name for S&R": "SimpleLLMMergeText"
+      },
+      "widgets_values": [
+        "",
+        ",",
+        "",
+        "",
+        ""
+      ]
+    },
+    {
+      "id": 42,
+      "type": "NS-PromptList",
+      "pos": [
+        515.9695434570312,
+        78.00647735595703
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            40
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-ns-util",
+        "ver": "0.2.0",
+        "Node name for S&R": "NS-PromptList"
+      },
+      "widgets_values": [
+        "prompt.yaml",
+        "abstract_art",
+        "abstract_art",
+        "abstract digital art, vibrant colors, geometric shapes,\nfluid dynamics, modern composition, high contrast,\nartistic expression, gallery quality"
+      ]
+    },
+    {
+      "id": 33,
+      "type": "PreviewImage",
+      "pos": [
+        2254.58251953125,
+        -650.1529541015625
+      ],
+      "size": [
+        1046.005126953125,
+        1081.5955810546875
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 30
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.49",
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 10,
+      "type": "Note",
+      "pos": [
+        266.0456848144531,
+        841.925048828125
+      ],
+      "size": [
+        456.6994323730469,
+        219.8455352783203
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {
+        "text": "",
+        "widget_ue_connectable": {}
+      },
+      "widgets_values": [
+        "SimpleLLM 基本的なテキスト生成ワークフロー\n\n1. SimpleLLMConfigOpenAI: OpenAI APIの設定（APIキーは環境変数OPENAI_API_KEYから取得）\n2. SimpleLLMAgent: システムプロンプトを設定してエージェントを作成\n3. SimpleLLMTextInput: ユーザーからの質問を入力\n4. SimpleLLMRunPrompt: LLMにプロンプトを送信して応答を生成\n5. SimpleLLMTextOutput: 応答をファイルに保存\n\n///\n\nSimpleLLM Basic Text Generation Workflow\n\n1. SimpleLLMConfigOpenAI: Configure the OpenAI API (the API key is obtained from the OPENAI_API_KEY environment variable)\n2. SimpleLLMAgent: Set a system prompt and create an agent\n3. SimpleLLMTextInput: Input a user question\n4. SimpleLLMRunPrompt: Send a prompt to LLM and generate a response\n5. SimpleLLMTextOutput: Save the response to a file"
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      0,
+      "LLM_CONFIG"
+    ],
+    [
+      2,
+      2,
+      0,
+      4,
+      0,
+      "LLM_AGENT"
+    ],
+    [
+      3,
+      3,
+      0,
+      4,
+      1,
+      "STRING"
+    ],
+    [
+      18,
+      4,
+      0,
+      24,
+      0,
+      "*"
+    ],
+    [
+      20,
+      26,
+      0,
+      27,
+      0,
+      "MODEL"
+    ],
+    [
+      21,
+      28,
+      0,
+      27,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      23,
+      26,
+      1,
+      29,
+      0,
+      "CLIP"
+    ],
+    [
+      24,
+      29,
+      0,
+      28,
+      0,
+      "CLIP"
+    ],
+    [
+      25,
+      29,
+      0,
+      30,
+      0,
+      "CLIP"
+    ],
+    [
+      27,
+      30,
+      0,
+      27,
+      2,
+      "CONDITIONING"
+    ],
+    [
+      28,
+      27,
+      0,
+      31,
+      0,
+      "LATENT"
+    ],
+    [
+      29,
+      32,
+      0,
+      31,
+      1,
+      "VAE"
+    ],
+    [
+      30,
+      31,
+      0,
+      33,
+      0,
+      "IMAGE"
+    ],
+    [
+      31,
+      34,
+      0,
+      27,
+      3,
+      "LATENT"
+    ],
+    [
+      37,
+      4,
+      0,
+      40,
+      1,
+      "STRING"
+    ],
+    [
+      39,
+      40,
+      0,
+      28,
+      1,
+      "STRING"
+    ],
+    [
+      40,
+      42,
+      0,
+      40,
+      0,
+      "STRING"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 2,
+      "title": "SimpleLLM Text Generate",
+      "bounding": [
+        -49.54432678222656,
+        371.6116943359375,
+        956.03955078125,
+        760.6204223632812
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "Preview",
+      "bounding": [
+        957.43701171875,
+        425.2356872558594,
+        347.48291015625,
+        260.7318420410156
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "T2I WorkFlow",
+      "bounding": [
+        939.2171020507812,
+        -723.8831787109375,
+        1271.4512939453125,
+        668.0464477539062
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 5,
+      "title": "Configuration Nodes",
+      "bounding": [
+        -44.36717224121094,
+        414.0644836425781,
+        295.47662353515625,
+        711.9552001953125
+      ],
+      "color": "#A88",
+      "font_size": 24,
+      "flags": {}
+    },
+    {
+      "id": 6,
+      "title": "Prompt",
+      "bounding": [
+        505.96954345703125,
+        -17.644258499145508,
+        866.5243530273438,
+        357.6000061035156
+      ],
+      "color": "#3f789e",
+      "font_size": 24,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.7981638236782971,
+      "offset": [
+        728.8981344573845,
+        1019.7598058008705
+      ]
+    },
+    "frontendVersion": "1.24.4",
+    "ue_links": [],
+    "links_added_by_ue": []
+  },
+  "version": 0.4
+}
