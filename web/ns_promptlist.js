@@ -1,6 +1,6 @@
-import { app } from "../../scripts/app.js";
-import { ComfyWidgets } from "../../scripts/widgets.js";
-import { api } from "../../scripts/api.js";
+import { app } from "../../../scripts/app.js";
+import { ComfyWidgets } from "../../../scripts/widgets.js";
+import { api } from "../../../scripts/api.js";
 
 // Store for YAML/title data
 const promptListStore = {
@@ -15,20 +15,38 @@ function findWidget(node, name) {
 
 // Helper to refresh node display
 function refreshNode(node) {
-    const currentSize = [...node.size];
-    
+    if (!node) return;
+
+    const previousSize = Array.isArray(node.size) ? [...node.size] : null;
+
     if (ComfyWidgets?.refreshNode) {
         ComfyWidgets.refreshNode(node);
     } else {
-        const size = node.computeSize();
-        node.setSize(size);
+        const size = node.computeSize?.();
+        if (Array.isArray(size)) {
+            if (typeof node.setSize === "function") {
+                node.setSize(size);
+            } else {
+                node.size = [...size];
+            }
+        }
         app.graph.setDirtyCanvas(true, true);
     }
-    
-    if (node.size[0] < currentSize[0] || node.size[1] < currentSize[1]) {
-        node.size[0] = Math.max(node.size[0], currentSize[0]);
-        node.size[1] = Math.max(node.size[1], currentSize[1]);
+
+    if (!previousSize) return;
+
+    const targetSize = [previousSize[0], previousSize[1]];
+
+    if (typeof node.setSize === "function") {
+        node.setSize(targetSize);
+    } else if (Array.isArray(node.size)) {
+        node.size[0] = targetSize[0];
+        node.size[1] = targetSize[1];
+    } else {
+        node.size = [...targetSize];
     }
+
+    app.graph.setDirtyCanvas(true, true);
 }
 
 // Setup socket listeners
@@ -52,6 +70,7 @@ function setupSocketListeners() {
         const data = event.detail;
         const targetNodeId = data.node_id;
         
+        // Only update the specific node if node_id is provided
         if (targetNodeId) {
             const targetNode = app.graph._nodes.find(n => n.id === targetNodeId);
             if (targetNode && targetNode.type === "NS-PromptList") {
@@ -64,6 +83,7 @@ function setupSocketListeners() {
                 refreshNode(targetNode);
             }
         } else {
+            // Fallback: update active node only
             const activeNode = app.canvas.node_over || app.canvas.selected_nodes?.[0];
             
             if (activeNode && activeNode.type === "NS-PromptList") {
@@ -82,6 +102,7 @@ function setupSocketListeners() {
 // Force reload YAML list
 async function reloadYamlList() {
     try {
+        // This will trigger the backend to refresh and broadcast new enum data
         await api.fetchApi("/ns_promptlist/reload_yamls", {
             method: "POST",
             headers: { "Content-Type": "application/json" }
@@ -97,9 +118,11 @@ function updateNodeEnums(node) {
     const selectWidget = findWidget(node, "select");
     
     if (yamlWidget && promptListStore.yamlFiles.length > 0) {
+        // Update YAML options
         const currentYaml = yamlWidget.value;
         yamlWidget.options.values = promptListStore.yamlFiles;
         
+        // Keep current selection if it still exists
         if (promptListStore.yamlFiles.includes(currentYaml)) {
             yamlWidget.value = currentYaml;
         } else {
@@ -108,14 +131,17 @@ function updateNodeEnums(node) {
     }
     
     if (selectWidget && yamlWidget) {
+        // Update title options based on current YAML
         const currentTitle = selectWidget.value;
         const titles = promptListStore.titlesByYaml[yamlWidget.value] || [""];
         selectWidget.options.values = titles;
         
+        // Keep current selection if it still exists
         if (titles.includes(currentTitle)) {
             selectWidget.value = currentTitle;
         } else if (titles[0] && titles[0] !== "") {
             selectWidget.value = titles[0];
+            // Fetch prompt for the new selection
             requestPromptData(yamlWidget.value, titles[0], node.id);
         } else {
             selectWidget.value = "";
@@ -132,20 +158,26 @@ function hookSelectChange(node) {
     const yamlWidget = findWidget(node, "select_yaml");
     const selectWidget = findWidget(node, "select");
     
+    // Store original callbacks
     const originalYamlCallback = yamlWidget?.callback;
     const originalSelectCallback = selectWidget?.callback;
     
+    // Hook YAML selection change
     if (yamlWidget) {
         yamlWidget.callback = function(value) {
+            // Call original if exists
             if (originalYamlCallback) {
                 originalYamlCallback.call(this, value);
             }
             
+            // Update title options for this specific node
             const titles = promptListStore.titlesByYaml[value] || [""];
             if (selectWidget) {
                 selectWidget.options.values = titles;
+                // Auto-select first title if available
                 selectWidget.value = titles[0] || "";
                 
+                // If we have a title, fetch its prompt
                 if (titles[0]) {
                     requestPromptData(value, titles[0], node.id);
                 }
@@ -155,12 +187,15 @@ function hookSelectChange(node) {
         };
     }
     
+    // Hook title selection change
     if (selectWidget) {
         selectWidget.callback = function(value) {
+            // Call original if exists
             if (originalSelectCallback) {
                 originalSelectCallback.call(this, value);
             }
             
+            // Fetch prompt data for this specific node
             if (value) {
                 requestPromptData(yamlWidget?.value || "", value, node.id);
             }
@@ -187,49 +222,32 @@ async function requestPromptData(yamlFile, title, nodeId = null) {
     }
 }
 
-// Delete title
-async function deleteTitle(yamlFile, title) {
-    try {
-        const response = await api.fetchApi("/ns_promptlist/delete_title", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
-                yaml: yamlFile, 
-                title: title
-            })
-        });
-        const result = await response.json();
-        if (result.success) {
-            await reloadYamlList();
-        }
-        return result.success;
-    } catch (error) {
-        console.error("Error deleting title:", error);
-        return false;
-    }
-}
-
 // Extension registration
 app.registerExtension({
     name: "NS.PromptList",
     
     async setup() {
+        // Setup socket listeners
         setupSocketListeners();
         
+        // Request initial YAML list on setup
         setTimeout(async () => {
             await reloadYamlList();
         }, 500);
         
+        // Hook into node addition
         const origNodeAdded = app.graph.onNodeAdded;
         app.graph.onNodeAdded = function(node) {
             if (origNodeAdded) {
                 origNodeAdded.call(this, node);
             }
             
+            // Hook our node type
             if (node.type === "NS-PromptList") {
                 setTimeout(() => {
                     hookSelectChange(node);
                     updateNodeEnums(node);
+                    // Request fresh data when node is added
                     reloadYamlList();
                 }, 0);
             }
@@ -238,32 +256,30 @@ app.registerExtension({
     
     async nodeCreated(node) {
         if (node.type === "NS-PromptList") {
+            // Set minimum size for the node
             node.size = [400, 300];
             node.computeSize = function() {
                 const size = LGraphNode.prototype.computeSize.apply(this, arguments);
+                // Ensure minimum width and height
                 size[0] = Math.max(size[0], 400);
                 size[1] = Math.max(size[1], 300);
                 return size;
             };
             
             // Add delete button
-            const deleteButton = node.addWidget("button", "Delete Title", "", async () => {
+            const deleteButton = node.addWidget("button", "delete_title", "", () => {
                 const yamlWidget = findWidget(node, "select_yaml");
                 const titleWidget = findWidget(node, "title");
                 
                 if (yamlWidget?.value && titleWidget?.value) {
                     if (confirm(`Delete title "${titleWidget.value}" from ${yamlWidget.value}?`)) {
-                        const success = await deleteTitle(yamlWidget.value, titleWidget.value);
-                        if (success) {
-                            titleWidget.value = "";
-                            const promptWidget = findWidget(node, "prompt");
-                            if (promptWidget) promptWidget.value = "";
-                            refreshNode(node);
-                        }
+                        // Call backend delete (would need to implement API endpoint)
+                        console.log("Delete not implemented in this version");
                     }
                 }
             });
             
+            // Initialize with first title after a short delay
             setTimeout(() => {
                 const yamlWidget = findWidget(node, "select_yaml");
                 const selectWidget = findWidget(node, "select");
