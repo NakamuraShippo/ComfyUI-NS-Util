@@ -71,3 +71,8 @@ If you encounter problems or have questions:
 
 - Thanks to the ComfyUI team for creating an amazing platform
 - Thanks to AI animals for giving me ideas
+
+## NakamuraShippo
+X        : [@nakamurashippo](https://x.com/Nakamurashippo)
+
+[![支援をお願いします](https://github.com/NakamuraShippo/Hatstand/blob/main/assets/sponsor_logo.png)](https://www.patreon.com/cw/NakamuraShippo)
