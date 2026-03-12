@@ -65,3 +65,8 @@ wikiの各ノードページに日本語と英語を併記しました。
 
 - 素晴らしいプラットフォームを作成したComfyUIチームに感謝
 - AIどうぶつ達にアイデアを戴きました、感謝感謝
+
+## NakamuraShippo
+X        : [@nakamurashippo](https://x.com/Nakamurashippo)
+
+[![支援をお願いします](https://github.com/NakamuraShippo/Hatstand/blob/main/assets/sponsor_logo.png)](https://www.patreon.com/cw/NakamuraShippo)
