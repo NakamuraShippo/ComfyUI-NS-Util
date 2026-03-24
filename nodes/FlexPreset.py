@@ -4,6 +4,8 @@ import yaml
 import json
 import asyncio
 import shutil
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any, Union
@@ -44,15 +46,15 @@ class YAMLFileHandler(FileSystemEventHandler):
         
     def on_modified(self, event: FileSystemEvent):
         if not event.is_directory and event.src_path.endswith('.yaml'):
-            self.node_instance.refresh_enums()
-    
+            self.node_instance._debounced_refresh()
+
     def on_created(self, event: FileSystemEvent):
         if not event.is_directory and event.src_path.endswith('.yaml'):
-            self.node_instance.refresh_enums()
-    
+            self.node_instance._debounced_refresh()
+
     def on_deleted(self, event: FileSystemEvent):
         if not event.is_directory and event.src_path.endswith('.yaml'):
-            self.node_instance.refresh_enums()
+            self.node_instance._debounced_refresh()
 
 
 class NS_FlexPreset:
@@ -78,9 +80,12 @@ class NS_FlexPreset:
             self.presets_dir.mkdir(exist_ok=True)
         
         self.write_lock = asyncio.Lock()
+        self._writing = False  # 自身の書き込み中フラグ
+        self._refresh_timer = None  # デバウンス用タイマー
+        self._DEBOUNCE_SEC = 0.3  # デバウンス間隔
         self.observer = None
         self.file_handler = YAMLFileHandler(self)
-        
+
         # B2: Store dynamic output information
         self._dynamic_output_types = []
         self._dynamic_output_names = []
@@ -105,9 +110,7 @@ class NS_FlexPreset:
         self._register_socket_handlers()
         
         # Initial enum refresh - 少し遅延を入れる
-        import threading
         def delayed_refresh():
-            import time
             time.sleep(0.5)  # バックエンドの準備を待つ
             self.refresh_enums()
         
@@ -135,7 +138,8 @@ class NS_FlexPreset:
         presets_dir = Path(__file__).parent / "presets"
         presets_dir.mkdir(exist_ok=True)
         
-        yaml_files = [f.name for f in presets_dir.glob("*.yaml")]
+        yaml_files = [f.name for f in presets_dir.glob("*.yaml")
+                      if not f.name.startswith("bad_")]
         if not yaml_files:
             # Create default yaml if none exist
             default_yaml = presets_dir / "default.yaml"
@@ -164,8 +168,9 @@ class NS_FlexPreset:
             }
         }
     
-    # R7: Legacy placeholders for ComfyUI core compatibility
-    RETURN_TYPES = ("STRING",)
+    # R7: Wildcard output type to support multiple FlexPreset nodes
+    # with different presets (INT/FLOAT/STRING) without class-level type conflicts
+    RETURN_TYPES = ("*",)
     RETURN_NAMES = ("output",)
     
     # R2: Dynamic output support
@@ -188,24 +193,20 @@ class NS_FlexPreset:
                 return ([], [])
             else:
                 if instance:
-                    instance._dynamic_output_types = ["STRING"]
+                    instance._dynamic_output_types = ["*"]
                     instance._dynamic_output_names = ["output"]
                     instance._panel_order = []
-                cls.RETURN_TYPES = ("STRING",)
-                cls.RETURN_NAMES = ("output",)
-                return (["STRING"], ["output"])
-        
+                return (["*"], ["output"])
+
         presets_dir = Path(__file__).parent / "presets"
         yaml_path = presets_dir / select_yaml
-        
+
         if not yaml_path.exists():
             if instance:
-                instance._dynamic_output_types = ["STRING"]
+                instance._dynamic_output_types = ["*"]
                 instance._dynamic_output_names = ["output"]
                 instance._panel_order = []
-            cls.RETURN_TYPES = ("STRING",)
-            cls.RETURN_NAMES = ("output",)
-            return (["STRING"], ["output"])
+            return (["*"], ["output"])
         
         try:
             with open(yaml_path, 'r', encoding='utf-8') as f:
@@ -248,31 +249,27 @@ class NS_FlexPreset:
                             # Output name format: <key>_<type>
                             output_name = f"{key}_{value_type}"
                             
-                            if value_type == 'int':
-                                outputs.append("INT")
-                                output_names.append(output_name)
-                            elif value_type == 'float':
-                                outputs.append("FLOAT")
-                                output_names.append(output_name)
-                            else:  # string or default
-                                outputs.append("STRING")
-                                output_names.append(output_name)
+                            # Use wildcard type to avoid class-level conflicts
+                            # between multiple FlexPreset nodes with different presets.
+                            # Actual type info is in the output name suffix (_int/_float/_string).
+                            outputs.append("*")
+                            output_names.append(output_name)
         except Exception as e:
             print(f"Error reading YAML for dynamic outputs: {e}")
         
         # Always have at least one output
         if not outputs:
-            outputs = ["STRING"]
+            outputs = ["*"]
             output_names = ["output"]
-        
-        # Store dynamic types in instance and update RETURN_TYPES
+
+        # Store dynamic types in instance and update class-level RETURN_TYPES
         if instance:
             instance._dynamic_output_types = outputs.copy()
             instance._dynamic_output_names = output_names.copy()
-        
+
         cls.RETURN_TYPES = tuple(outputs)
         cls.RETURN_NAMES = tuple(output_names)
-        
+
         return (outputs, output_names)
     
     FUNCTION = "run"
@@ -289,8 +286,9 @@ class NS_FlexPreset:
         """Get list of YAML files in presets directory"""
         if not self.presets_dir.exists():
             return ["default.yaml"]
-        
-        yaml_files = [f.name for f in self.presets_dir.glob("*.yaml")]
+
+        yaml_files = [f.name for f in self.presets_dir.glob("*.yaml")
+                      if not f.name.startswith("bad_")]
         if not yaml_files:
             # Create default yaml if none exist
             default_yaml = self.presets_dir / "default.yaml"
@@ -304,14 +302,13 @@ class NS_FlexPreset:
         yaml_path = self.presets_dir / yaml_file
         if not yaml_path.exists():
             return [""]
-        
+
         try:
             with open(yaml_path, 'r', encoding='utf-8') as f:
                 data = yaml.load(f, Loader=OrderedLoader) or {}
             return list(data.keys())
         except Exception as e:
-            print(f"Error reading YAML {yaml_file}: {e}")
-            self._handle_corrupt_yaml(yaml_path)
+            print(f"[NS-FlexPreset] Error reading YAML {yaml_file}: {e}")
             return [""]
     
     def _get_values_from_yaml(self, yaml_file: str, title: str) -> Dict[str, Any]:
@@ -319,24 +316,17 @@ class NS_FlexPreset:
         yaml_path = self.presets_dir / yaml_file
         if not yaml_path.exists():
             return {}
-        
+
         try:
             with open(yaml_path, 'r', encoding='utf-8') as f:
                 data = yaml.load(f, Loader=OrderedLoader) or {}
-            
+
             if title in data and isinstance(data[title], dict):
                 return data[title].get('values', {})
             return {}
         except Exception as e:
             print(f"Error reading values from YAML: {e}")
             return {}
-    
-    def _handle_corrupt_yaml(self, yaml_path: Path):
-        """Handle corrupt YAML by renaming and creating new"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        bad_path = yaml_path.parent / f"bad_{timestamp}_{yaml_path.name}"
-        shutil.move(str(yaml_path), str(bad_path))
-        yaml_path.write_text("# Recovered from corrupt file\n")
     
     def _validate_value_type(self, value_type: str, value: str) -> bool:
         """Validate value matches its declared type"""
@@ -346,6 +336,18 @@ class NS_FlexPreset:
         regex = self.TYPE_REGEX[value_type]
         return bool(re.match(regex, str(value)))
     
+    def _debounced_refresh(self):
+        """デバウンス付きリフレッシュ。自身の書き込み中はスキップ。"""
+        if self._writing:
+            return
+
+        if self._refresh_timer is not None:
+            self._refresh_timer.cancel()
+
+        self._refresh_timer = threading.Timer(self._DEBOUNCE_SEC, self.refresh_enums)
+        self._refresh_timer.daemon = True
+        self._refresh_timer.start()
+
     def _start_watchdog(self):
         """Start file system observer"""
         # A2: Don't start if already running
@@ -595,27 +597,27 @@ class NS_FlexPreset:
     def _get_prompt_data(self, yaml_file: str, title: str) -> Dict[str, Any]:
         """Get prompt data from YAML"""
         yaml_path = self.presets_dir / yaml_file
-        
+
         if not yaml_path.exists():
             return {"title": title, "values": {}}
-        
+
         try:
             with open(yaml_path, 'r', encoding='utf-8') as f:
                 data = yaml.load(f, Loader=OrderedLoader) or {}
-            
+
             if title in data and isinstance(data[title], dict):
                 values = data[title].get("values", {})
             else:
                 values = {}
-            
+
             # 順序を保持するために、キーのリストも送信
             keys_order = list(values.keys()) if values else []
-            
+
             # プリセット変更時はpanel_orderをリセット
-            self._panel_order = keys_order.copy()  # ★追加
-            
+            self._panel_order = keys_order.copy()
+
             return {
-                "title": title, 
+                "title": title,
                 "values": values,
                 "keys_order": keys_order
             }
@@ -626,56 +628,57 @@ class NS_FlexPreset:
     async def _save_yaml(self, yaml_file: str, data: Dict):
         """Atomic save YAML with lock, preserving order"""
         async with self.write_lock:
-            yaml_path = self.presets_dir / yaml_file
-            
-            with tempfile.NamedTemporaryFile(mode='w', dir=str(self.presets_dir), 
-                                        delete=False, encoding='utf-8') as tmp:
-                # Use custom dumper to preserve order
-                yaml.dump(data, tmp, Dumper=OrderedDumper, 
-                        default_flow_style=False, allow_unicode=True, 
-                        sort_keys=False)
-                tmp_path = tmp.name
-            
-            # Atomic replace
-            os.replace(tmp_path, str(yaml_path))
+            self._writing = True
+            try:
+                yaml_path = self.presets_dir / yaml_file
+
+                with tempfile.NamedTemporaryFile(mode='w', dir=str(self.presets_dir),
+                                                delete=False, encoding='utf-8',
+                                                suffix='.tmp') as tmp:
+                    # Use custom dumper to preserve order
+                    yaml.dump(data, tmp, Dumper=OrderedDumper,
+                              default_flow_style=False, allow_unicode=True,
+                              sort_keys=False)
+                    tmp_path = tmp.name
+
+                # Atomic replace
+                os.replace(tmp_path, str(yaml_path))
+            finally:
+                self._writing = False
     
     async def _ensure_title_exists(self, yaml_file: str, title: str) -> bool:
         """Ensure title exists in YAML file"""
         yaml_path = self.presets_dir / yaml_file
-        
+
         try:
-            # Read existing data
             if yaml_path.exists():
                 with open(yaml_path, 'r', encoding='utf-8') as f:
                     data = yaml.load(f, Loader=OrderedLoader) or {}
             else:
                 data = {}
-            
-            # Check if title exists
+
             if title not in data:
                 data[title] = {"values": {}}
                 await self._save_yaml(yaml_file, data)
-                return True
-            
+
             return True
-            
+
         except Exception as e:
             print(f"Error ensuring title exists: {e}")
             return False
     
-    async def _add_value(self, yaml_file: str, title: str, key_name: str, 
+    async def _add_value(self, yaml_file: str, title: str, key_name: str,
                         key_type: str, key_value: str) -> bool:
         """Add a value to YAML preserving order"""
         yaml_path = self.presets_dir / yaml_file
-        
+
         try:
-            # Read existing data with OrderedDict
             if yaml_path.exists():
                 with open(yaml_path, 'r', encoding='utf-8') as f:
                     data = yaml.load(f, Loader=OrderedLoader) or OrderedDict()
             else:
                 data = OrderedDict()
-            
+
             # Ensure structure exists with OrderedDict
             if title not in data:
                 data[title] = OrderedDict([("values", OrderedDict())])
@@ -708,14 +711,14 @@ class NS_FlexPreset:
     async def _delete_value(self, yaml_file: str, title: str, key_name: str) -> bool:
         """Delete a value from YAML"""
         yaml_path = self.presets_dir / yaml_file
-        
+
         if not yaml_path.exists():
             return False
-        
+
         try:
             with open(yaml_path, 'r', encoding='utf-8') as f:
                 data = yaml.load(f, Loader=OrderedLoader) or {}
-            
+
             if title in data and "values" in data[title] and key_name in data[title]["values"]:
                 del data[title]["values"][key_name]
                 await self._save_yaml(yaml_file, data)
@@ -729,15 +732,15 @@ class NS_FlexPreset:
     async def _update_key_name(self, yaml_file: str, title: str, old_key: str, new_key: str) -> bool:
         """Update a key name while preserving order"""
         yaml_path = self.presets_dir / yaml_file
-        
+
         if not yaml_path.exists() or not new_key:
             return False
-        
+
         try:
             with open(yaml_path, 'r', encoding='utf-8') as f:
                 data = yaml.load(f, Loader=OrderedLoader) or {}
-            
-            if (title in data and "values" in data[title] and 
+
+            if (title in data and "values" in data[title] and
                 old_key in data[title]["values"] and old_key != new_key):
                 
                 # Create new OrderedDict to preserve order

@@ -3,7 +3,6 @@ import torch.nn.functional as F
 import comfy.sample
 import comfy.samplers
 import comfy.utils
-import comfy.model_management
 
 
 # --- Evaluation Metrics ---
@@ -110,6 +109,9 @@ class NS_RefinerBoundaryOptimizer:
                 "sensitivity": ("FLOAT", {
                     "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.1,
                 }),
+                "denoise": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01,
+                }),
             }
         }
 
@@ -122,7 +124,7 @@ class NS_RefinerBoundaryOptimizer:
     def execute(self, model_base, model_refiner, positive, negative,
                 positive_refiner, negative_refiner, latent_image, seed, steps, cfg,
                 sampler_name, scheduler, min_base_ratio, max_base_ratio,
-                evaluation_metric, sensitivity):
+                evaluation_metric, sensitivity, denoise):
 
         if min_base_ratio >= max_base_ratio:
             min_base_ratio = max_base_ratio - 0.05
@@ -143,6 +145,7 @@ class NS_RefinerBoundaryOptimizer:
         freq_metrics = []
         stab_metrics = []
         prev_denoised = [None]
+        analysis_output = [None]
 
         def eval_post_cfg(args):
             denoised = args["denoised"]
@@ -156,10 +159,10 @@ class NS_RefinerBoundaryOptimizer:
         def analysis_callback(step, x0, x, total_steps):
             pbar.update_absolute(step + 1, steps)
 
-        comfy.sample.sample(
+        analysis_output[0] = comfy.sample.sample(
             analysis_model, noise, steps, cfg, sampler_name, scheduler,
             positive, negative, latent_samples,
-            denoise=1.0, disable_noise=False,
+            denoise=denoise, disable_noise=False,
             start_step=None, last_step=max_base_step,
             force_full_denoise=False,
             noise_mask=noise_mask,
@@ -179,19 +182,25 @@ class NS_RefinerBoundaryOptimizer:
               f"(range={min_base_step}-{max_base_step}, metric={evaluation_metric}, "
               f"sensitivity={sensitivity})")
 
-        # --- Phase 2: Base を switch_step まで実行（同一 seed → 決定論的に同一結果）---
-        def base_callback(step, x0, x, total_steps):
-            pbar.update_absolute(step + 1, steps)
+        # --- Phase 2: Base を switch_step まで実行 ---
+        # switch_step == max_base_step の場合、Phase 1 の結果を再利用（同一 seed で決定論的に同一結果）
+        if switch_step >= max_base_step:
+            base_output = analysis_output[0]
+        else:
+            def base_callback(step, x0, x, total_steps):
+                pbar.update_absolute(step + 1, steps)
 
-        base_output = comfy.sample.sample(
-            model_base, noise, steps, cfg, sampler_name, scheduler,
-            positive, negative, latent_samples,
-            denoise=1.0, disable_noise=False,
-            start_step=None, last_step=switch_step,
-            force_full_denoise=False,
-            noise_mask=noise_mask,
-            callback=base_callback, seed=seed,
-        )
+            base_output = comfy.sample.sample(
+                model_base, noise, steps, cfg, sampler_name, scheduler,
+                positive, negative, latent_samples,
+                denoise=denoise, disable_noise=False,
+                start_step=None, last_step=switch_step,
+                force_full_denoise=False,
+                noise_mask=noise_mask,
+                callback=base_callback, seed=seed,
+            )
+
+        analysis_output[0] = None  # メモリ解放
 
         # --- Phase 3: Refiner を switch_step から実行 ---
         if switch_step >= steps:
@@ -200,7 +209,7 @@ class NS_RefinerBoundaryOptimizer:
             base_output = comfy.sample.fix_empty_latent_channels(
                 model_refiner, base_output
             )
-            zero_noise = torch.zeros_like(noise)
+            zero_noise = torch.zeros_like(base_output)
 
             def refiner_callback(step, x0, x, total_steps):
                 pbar.update_absolute(switch_step + step + 1, steps)
@@ -208,7 +217,7 @@ class NS_RefinerBoundaryOptimizer:
             final_samples = comfy.sample.sample(
                 model_refiner, zero_noise, steps, cfg, sampler_name, scheduler,
                 positive_refiner, negative_refiner, base_output,
-                denoise=1.0, disable_noise=True,
+                denoise=denoise, disable_noise=True,
                 start_step=switch_step, last_step=steps,
                 force_full_denoise=True,
                 noise_mask=noise_mask,
