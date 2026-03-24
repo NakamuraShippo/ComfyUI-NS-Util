@@ -120,6 +120,10 @@ class NS_CrossAttentionMapRecycler:
                     "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
                 }),
                 "target_layers": (["all", "mid_only", "up_only", "down_and_mid"],),
+                "collection_momentum": ("FLOAT", {
+                    "default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "EMA momentum for collected attention maps. Higher = more weight on earlier maps",
+                }),
             }
         }
 
@@ -128,7 +132,7 @@ class NS_CrossAttentionMapRecycler:
     CATEGORY = "NS/Attention"
 
     def apply(self, model, collection_end, injection_start, injection_strength,
-              decay, target_layers):
+              decay, target_layers, collection_momentum):
 
         m = model.clone()
         model_sampling = m.get_model_object("model_sampling")
@@ -156,7 +160,7 @@ class NS_CrossAttentionMapRecycler:
                 layer_id = f"{block}_{block_index}" if block else f"{block_key}_{block_index}"
 
                 # このレイヤーが target_layers フィルタに一致するか
-                effective_block = block if block else block_key
+                effective_block = (block, block_index) if block else block_key
                 if not _block_matches_target(effective_block, target_layers):
                     return optimized_attention_no_map(q, k, v, heads, dim_head, attn_precision)
 
@@ -199,9 +203,8 @@ class NS_CrossAttentionMapRecycler:
                             collection_count[layer_id] = 1
                         else:
                             # EMA 平均化
-                            alpha = 0.7
                             stored_maps[layer_id] = (
-                                alpha * stored_maps[layer_id] + (1 - alpha) * cond_map
+                                collection_momentum * stored_maps[layer_id] + (1 - collection_momentum) * cond_map
                             )
                             collection_count[layer_id] += 1
 

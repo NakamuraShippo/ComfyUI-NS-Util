@@ -618,19 +618,25 @@ function updateNodeWidgets(data) {
             while (node.outputs.length > 0) {
                 node.removeOutput(0);
             }
-            
+
             for (let i = 0; i < data.outputs.length; i++) {
                 const outputType = data.outputs[i];
                 const outputName = data.output_names[i];
                 node.addOutput(outputName, outputType);
             }
-            
+
             // グラフを更新
             app.graph.setDirtyCanvas(true);
         } else if (isFullRefresh) {
             // 通常の更新
             updateNodeOutputs(node, true);
         }
+
+        // プリセット切替時はコンテンツに合わせてノードサイズを再計算
+        // user_resized フラグをリセットして縮小も許可する
+        node._nsFlexPresetWidgets.user_resized = false;
+        const computed = node.computeSize();
+        node.setSize([Math.max(node.size[0], computed[0]), computed[1]]);
     }
 }
 
@@ -1572,11 +1578,12 @@ function updateNodeOutputs(node, forceUpdate = false) {
         }
     }
     
-    // Only auto-resize if user hasn't manually resized
-    if (shouldResize) {
-        node.setSize(node.computeSize());
+    // Auto-resize: forceUpdate（プリセット切替等）時は常にリサイズ
+    if (shouldResize || forceUpdate) {
+        const computed = node.computeSize();
+        node.setSize([Math.max(node.size[0], computed[0]), computed[1]]);
     }
-    
+
     // Force graph connection refresh
     if (app.graph) {
         app.graph.setDirtyCanvas(true);
