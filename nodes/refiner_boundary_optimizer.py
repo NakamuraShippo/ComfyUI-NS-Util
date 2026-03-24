@@ -35,19 +35,22 @@ def determine_switch_step(freq_metrics, stab_metrics, min_step, max_step,
     else:  # combined
         step_f = _switch_by_frequency(freq_metrics, min_step, max_step, sensitivity)
         step_s = _switch_by_stability(stab_metrics, min_step, max_step, sensitivity)
-        # どちらか早い方を採用（飽和の兆候が出た時点で切替）
         return min(step_f, step_s)
 
 
 def _switch_by_stability(metrics, min_step, max_step, sensitivity):
-    """stability が飽和したステップを検出"""
+    """stability が飽和したステップを検出
+
+    sensitivity が高い → 閾値が高い → 飽和を検出しやすい → 早く切替
+    """
     valid_early = [m for m in metrics[:min_step] if m < float("inf") and m > 0]
     if not valid_early:
         return max_step
 
     baseline = sum(valid_early) / len(valid_early)
-    # sensitivity=0 → ratio=0.8（飽和しにくい）, sensitivity=1 → ratio=0.3（飽和しやすい）
-    threshold_ratio = 0.8 - sensitivity * 0.5
+    # sensitivity=0 → ratio=0.2（ほぼ切替しない）
+    # sensitivity=1 → ratio=0.8（すぐ切替）
+    threshold_ratio = 0.2 + sensitivity * 0.6
     threshold = baseline * threshold_ratio
 
     for i in range(min_step, min(max_step, len(metrics))):
@@ -57,15 +60,19 @@ def _switch_by_stability(metrics, min_step, max_step, sensitivity):
 
 
 def _switch_by_frequency(metrics, min_step, max_step, sensitivity):
-    """高周波エネルギー増加率が鈍化したステップを検出"""
+    """高周波エネルギー増加率が鈍化したステップを検出
+
+    sensitivity が高い → 閾値が高い → 増加率低下を検出しやすい → 早く切替
+    """
     if len(metrics) < min_step + 2:
         return max_step
 
     for i in range(min_step + 1, min(max_step, len(metrics))):
         if metrics[i - 1] > 1e-8:
             rate = abs(metrics[i] - metrics[i - 1]) / metrics[i - 1]
-            # sensitivity=0 → threshold=0.2, sensitivity=1 → threshold=0.05
-            threshold = 0.2 - sensitivity * 0.15
+            # sensitivity=0 → threshold=0.02（ほぼ切替しない）
+            # sensitivity=1 → threshold=0.2（すぐ切替）
+            threshold = 0.02 + sensitivity * 0.18
             if rate < threshold:
                 return i + 1
     return max_step
@@ -124,29 +131,33 @@ class NS_RefinerBoundaryOptimizer:
         max_base_step = min(steps, int(steps * max_base_ratio))
 
         latent_samples = latent_image["samples"].clone()
+        latent_samples = comfy.sample.fix_empty_latent_channels(model_base, latent_samples)
         batch_inds = latent_image.get("batch_index")
         noise_mask = latent_image.get("noise_mask")
-
         noise = comfy.sample.prepare_noise(latent_samples, seed, batch_inds)
-        latent_samples = comfy.sample.fix_empty_latent_channels(model_base, latent_samples)
 
-        # --- Phase 1: Base サンプリング + メトリクス収集 ---
-        freq_metrics = []
-        stab_metrics = []
-        captured_x = {}
-        prev_denoised = [None]
         pbar = comfy.utils.ProgressBar(steps)
 
+        # --- Phase 1: 分析パス（Base を max_base_step まで実行しメトリクス収集）---
+        analysis_model = model_base.clone()
+        freq_metrics = []
+        stab_metrics = []
+        prev_denoised = [None]
+
+        def eval_post_cfg(args):
+            denoised = args["denoised"]
+            freq_metrics.append(eval_frequency(denoised))
+            stab_metrics.append(eval_stability(denoised, prev_denoised[0]))
+            prev_denoised[0] = denoised.detach().clone()
+            return denoised
+
+        analysis_model.set_model_sampler_post_cfg_function(eval_post_cfg)
+
         def analysis_callback(step, x0, x, total_steps):
-            captured_x[step] = x.detach().clone()
-            if x0 is not None:
-                freq_metrics.append(eval_frequency(x0))
-                stab_metrics.append(eval_stability(x0, prev_denoised[0]))
-                prev_denoised[0] = x0.detach().clone()
             pbar.update_absolute(step + 1, steps)
 
-        base_samples = comfy.sample.sample(
-            model_base, noise, steps, cfg, sampler_name, scheduler,
+        comfy.sample.sample(
+            analysis_model, noise, steps, cfg, sampler_name, scheduler,
             positive, negative, latent_samples,
             denoise=1.0, disable_noise=False,
             start_step=None, last_step=max_base_step,
@@ -154,6 +165,9 @@ class NS_RefinerBoundaryOptimizer:
             noise_mask=noise_mask,
             callback=analysis_callback, seed=seed,
         )
+
+        # メモリ解放
+        prev_denoised[0] = None
 
         # --- 切替ステップ決定 ---
         switch_step = determine_switch_step(
@@ -165,26 +179,26 @@ class NS_RefinerBoundaryOptimizer:
               f"(range={min_base_step}-{max_base_step}, metric={evaluation_metric}, "
               f"sensitivity={sensitivity})")
 
-        # --- 中間 latent の取得 ---
-        # callback step i の x は sigma_{i+1} のノイズレベル
-        # switch_step で Refiner を開始するには step (switch_step - 1) の x が必要
-        if switch_step < max_base_step and (switch_step - 1) in captured_x:
-            intermediate = captured_x[switch_step - 1]
-        else:
-            switch_step = max_base_step
-            intermediate = base_samples
+        # --- Phase 2: Base を switch_step まで実行（同一 seed → 決定論的に同一結果）---
+        def base_callback(step, x0, x, total_steps):
+            pbar.update_absolute(step + 1, steps)
 
-        # メモリ解放
-        captured_x.clear()
-        prev_denoised[0] = None
+        base_output = comfy.sample.sample(
+            model_base, noise, steps, cfg, sampler_name, scheduler,
+            positive, negative, latent_samples,
+            denoise=1.0, disable_noise=False,
+            start_step=None, last_step=switch_step,
+            force_full_denoise=False,
+            noise_mask=noise_mask,
+            callback=base_callback, seed=seed,
+        )
 
-        # --- Phase 2: Refiner サンプリング ---
+        # --- Phase 3: Refiner を switch_step から実行 ---
         if switch_step >= steps:
-            # Refiner 不要（Base で全ステップ完了）
-            final_samples = intermediate
+            final_samples = base_output
         else:
-            intermediate = comfy.sample.fix_empty_latent_channels(
-                model_refiner, intermediate
+            base_output = comfy.sample.fix_empty_latent_channels(
+                model_refiner, base_output
             )
             zero_noise = torch.zeros_like(noise)
 
@@ -193,7 +207,7 @@ class NS_RefinerBoundaryOptimizer:
 
             final_samples = comfy.sample.sample(
                 model_refiner, zero_noise, steps, cfg, sampler_name, scheduler,
-                positive_refiner, negative_refiner, intermediate,
+                positive_refiner, negative_refiner, base_output,
                 denoise=1.0, disable_noise=True,
                 start_step=switch_step, last_step=steps,
                 force_full_denoise=True,
