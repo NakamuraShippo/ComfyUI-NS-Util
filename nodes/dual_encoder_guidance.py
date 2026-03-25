@@ -4,7 +4,8 @@ import torch
 
 class NS_DualEncoderTextEncode:
     """SDXLの2つのCLIPエンコーダに別々のプロンプトを入力し、
-    content(被写体・構図)とstyle(画風・ライティング)の分離制御を実現する"""
+    content(被写体・構図)とstyle(画風・ライティング)の分離制御を実現する。
+    content_blend_G で content 情報を G encoder にも流す比率を調整可能。"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -13,15 +14,15 @@ class NS_DualEncoderTextEncode:
                 "clip": ("CLIP",),
                 "prompt_content": ("STRING", {
                     "multiline": True, "dynamicPrompts": True,
-                    "tooltip": "Content prompt (subject, composition, color) -> CLIP ViT-L",
+                    "tooltip": "Content prompt (subject, composition, color) -> CLIP ViT-L + blended to ViT-bigG",
                 }),
                 "prompt_style": ("STRING", {
                     "multiline": True, "dynamicPrompts": True,
                     "tooltip": "Style prompt (aesthetics, lighting, medium) -> OpenCLIP ViT-bigG",
                 }),
-                "pooled_source": (["style", "content"], {
-                    "default": "style",
-                    "tooltip": "Which prompt's pooled output to use. Style (ViT-bigG) is default",
+                "content_blend_G": ("FLOAT", {
+                    "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "How much content prompt influences G encoder & pooled output. 0.0=G is pure style, 1.0=G is pure content. Pooled output uses accelerated curve for stronger content influence.",
                 }),
             }
         }
@@ -30,48 +31,71 @@ class NS_DualEncoderTextEncode:
     FUNCTION = "encode"
     CATEGORY = "NS/Conditioning"
 
-    def encode(self, clip, prompt_content, prompt_style, pooled_source):
-        # Non-SDXL fallback: clip_g が存在しない場合は prompt_content のみ使用
+    def _tokenize_and_balance(self, clip, prompt_l, prompt_g):
+        """L/G それぞれのプロンプトでトークナイズし、バッチ長を揃える"""
+        tokens_g = clip.tokenize(prompt_g)
+        tokens_l = clip.tokenize(prompt_l)
+        tokens_g["l"] = tokens_l["l"]
+        empty = clip.tokenize("")
+        while len(tokens_g["l"]) < len(tokens_g["g"]):
+            tokens_g["l"] += empty["l"]
+        while len(tokens_g["l"]) > len(tokens_g["g"]):
+            tokens_g["g"] += empty["g"]
+        return tokens_g
+
+    def encode(self, clip, prompt_content, prompt_style, content_blend_G):
+        # Non-SDXL fallback
         tokens_test = clip.tokenize(prompt_content)
         if "g" not in tokens_test:
             print("[NS-DualEncoderTextEncode] Warning: Non-SDXL CLIP detected, using prompt_content only.")
             return (clip.encode_from_tokens_scheduled(tokens_test),)
 
-        # style -> clip_g (1280dim), content -> clip_l (768dim)
-        tokens = clip.tokenize(prompt_style)
-        tokens["l"] = tokens_test["l"]
+        # Encoding A: G=style, L=content（分離エンコード）
+        tokens_style = self._tokenize_and_balance(clip, prompt_content, prompt_style)
+        cond_style = clip.encode_from_tokens_scheduled(tokens_style)
 
-        # Balance token batch lengths (same as CLIPTextEncodeSDXL)
-        empty = clip.tokenize("")
-        while len(tokens["l"]) < len(tokens["g"]):
-            tokens["l"] += empty["l"]
-        while len(tokens["l"]) > len(tokens["g"]):
-            tokens["g"] += empty["g"]
+        # blend=0 なら分離エンコードそのまま
+        if content_blend_G <= 0.0:
+            return (cond_style,)
 
-        cond = clip.encode_from_tokens_scheduled(tokens)
+        # Encoding B: G=content, L=content（標準エンコード相当）
+        tokens_content = self._tokenize_and_balance(clip, prompt_content, prompt_content)
+        cond_content = clip.encode_from_tokens_scheduled(tokens_content)
 
-        if pooled_source == "content":
-            # content プロンプトで再エンコードし、pooled_output を差し替え
-            tokens_content_only = clip.tokenize(prompt_content)
-            tokens_content_only["g"] = tokens_content_only.get("g", tokens_test.get("g"))
-            # Balance
-            empty_c = clip.tokenize("")
-            while len(tokens_content_only["l"]) < len(tokens_content_only["g"]):
-                tokens_content_only["l"] += empty_c["l"]
-            while len(tokens_content_only["l"]) > len(tokens_content_only["g"]):
-                tokens_content_only["g"] += empty_c["g"]
+        # blend=1 なら content エンコードそのまま
+        if content_blend_G >= 1.0:
+            return (cond_content,)
 
-            content_cond = clip.encode_from_tokens_scheduled(tokens_content_only)
-            # pooled_output を差し替え
-            out = []
-            for i, (cond_tensor, cond_dict) in enumerate(cond):
-                new_dict = cond_dict.copy()
-                if i < len(content_cond) and "pooled_output" in content_cond[i][1]:
-                    new_dict["pooled_output"] = content_cond[i][1]["pooled_output"]
-                out.append((cond_tensor, new_dict))
-            return (out,)
+        # G 成分 (768:2048) と pooled_output をブレンド
+        # pooled output は影響力が大きいため、二次曲線で content 寄りに加速
+        # blend=0.3 → hidden=0.3, pooled=0.51
+        # blend=0.5 → hidden=0.5, pooled=0.75
+        # blend=0.7 → hidden=0.7, pooled=0.91
+        blend = content_blend_G
+        pooled_blend = 1.0 - (1.0 - blend) ** 2
+        out = []
+        for i, (tensor_s, dict_s) in enumerate(cond_style):
+            if i < len(cond_content):
+                tensor_c, dict_c = cond_content[i]
+                blended_tensor = tensor_s.clone()
+                # G hidden states: 線形ブレンド
+                if blended_tensor.shape[-1] >= 2048:
+                    blended_tensor[..., 768:2048] = (
+                        (1 - blend) * tensor_s[..., 768:2048]
+                        + blend * tensor_c[..., 768:2048]
+                    )
+                new_dict = dict_s.copy()
+                # pooled_output: 二次曲線ブレンド（content 寄りに加速）
+                if "pooled_output" in dict_s and "pooled_output" in dict_c:
+                    new_dict["pooled_output"] = (
+                        (1 - pooled_blend) * dict_s["pooled_output"]
+                        + pooled_blend * dict_c["pooled_output"]
+                    )
+                out.append((blended_tensor, new_dict))
+            else:
+                out.append((tensor_s, dict_s.copy()))
 
-        return (cond,)
+        return (out,)
 
 
 def _scale_lg_components(cond_tensor, scale_L, scale_G, normalize):
