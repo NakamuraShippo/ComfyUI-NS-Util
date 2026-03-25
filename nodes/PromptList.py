@@ -346,6 +346,30 @@ class NS_PromptList:
 
             return web.json_response({"success": success, **state})
 
+        @server.routes.post("/ns_promptlist/create_yaml")
+        async def create_yaml(request):
+            """Create a new empty YAML file"""
+            data = await request.json()
+            yaml_name = data.get("yaml", "")
+            node_id = data.get("node_id", None)
+
+            if not yaml_name:
+                return web.json_response({"success": False, "error": "Missing YAML name"})
+
+            instance = NS_PromptList._get_instance()
+            yaml_path = instance.yaml_dir / yaml_name
+
+            if yaml_path.exists():
+                return web.json_response({"success": False, "error": "YAML file already exists"})
+
+            try:
+                await instance._save_yaml(yaml_name, {})
+                enum_data = instance.refresh_enums()
+                return web.json_response({"success": True, **enum_data})
+            except Exception as e:
+                print(f"Error creating YAML: {e}")
+                return web.json_response({"success": False, "error": str(e)})
+
     def _get_prompt_data(self, yaml_file: str, title: str) -> Dict[str, str]:
         """Get prompt data from YAML"""
         yaml_path = self.yaml_dir / yaml_file
