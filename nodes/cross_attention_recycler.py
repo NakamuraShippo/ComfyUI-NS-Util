@@ -124,6 +124,10 @@ class NS_CrossAttentionMapRecycler:
                     "default": 0.7, "min": 0.0, "max": 1.0, "step": 0.05,
                     "tooltip": "EMA momentum for collected attention maps. Higher = more weight on earlier maps",
                 }),
+                "reset_cache": (["enable", "disable"], {
+                    "default": "enable",
+                    "tooltip": "Enable: clear cached attention maps every generation (more diversity). Disable: reuse maps across generations (more consistency)",
+                }),
             }
         }
 
@@ -132,10 +136,11 @@ class NS_CrossAttentionMapRecycler:
     CATEGORY = "NS/Attention"
 
     def apply(self, model, collection_end, injection_start, injection_strength,
-              decay, target_layers, collection_momentum):
+              decay, target_layers, collection_momentum, reset_cache):
 
         m = model.clone()
         model_sampling = m.get_model_object("model_sampling")
+        do_reset_cache = reset_cache == "enable"
 
         # 収集されたアテンションマップを保持する共有辞書
         # key: layer_id 文字列
@@ -143,6 +148,7 @@ class NS_CrossAttentionMapRecycler:
         stored_maps = {}
         collection_count = {}
         _last_progress = [1.0]  # 前回の進行率（リセット検出用）
+        _generation_reset_done = [False]  # 世代カウンタリセット済みフラグ
 
         def make_replace_fn(block_key):
             """各ブロック用の attn2_replace コールバックを生成"""
@@ -170,10 +176,20 @@ class NS_CrossAttentionMapRecycler:
                 else:
                     return optimized_attention_no_map(q, k, v, heads, dim_head, attn_precision)
 
-                # 新規生成検出: 進行率が大きく戻ったらリセット
-                if progress < _last_progress[0] - 0.5:
-                    stored_maps.clear()
-                    collection_count.clear()
+                # 新規生成検出: 世代カウンタ方式 or 進行率ジャンプ方式
+                if do_reset_cache:
+                    # enable: 収集フェーズ開始時に毎回クリア
+                    if progress <= collection_end and not _generation_reset_done[0]:
+                        stored_maps.clear()
+                        collection_count.clear()
+                        _generation_reset_done[0] = True
+                    elif progress > collection_end:
+                        _generation_reset_done[0] = False
+                else:
+                    # disable: 従来の進行率ジャンプ検出
+                    if progress < _last_progress[0] - 0.5:
+                        stored_maps.clear()
+                        collection_count.clear()
                 _last_progress[0] = progress
 
                 # --- 収集フェーズ ---
