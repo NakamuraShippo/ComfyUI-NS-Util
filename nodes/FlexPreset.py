@@ -13,6 +13,18 @@ from collections import OrderedDict
 import tempfile
 import atexit
 
+
+class _AnyType(str):
+    """A special type that is always equal in not-equal comparisons.
+    This allows '*' output slots to connect to any input type in LiteGraph.
+    Credit to pythongosssss / rgthree."""
+
+    def __ne__(self, __value: object) -> bool:
+        return False
+
+
+ANY_TYPE = _AnyType("*")
+
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
@@ -64,7 +76,8 @@ class NS_FlexPreset:
     TYPE_REGEX = {
         'int': r'^-?[0-9]+$',
         'float': r'^-?[0-9]*\.?[0-9]+$',
-        'string': r'.*'  # Any scalar value
+        'string': r'.*',  # Any scalar value
+        'list': r'.*'  # List selection (stored as string)
     }
     
     def __init__(self):
@@ -170,8 +183,8 @@ class NS_FlexPreset:
     
     # R7: Wildcard output type to support multiple FlexPreset nodes
     # with different presets (INT/FLOAT/STRING) without class-level type conflicts
-    RETURN_TYPES = ("*",)
-    RETURN_NAMES = ("output",)
+    RETURN_TYPES = (ANY_TYPE,)
+    RETURN_NAMES = ("auto_setup",)
     
     # R2: Dynamic output support
     OUTPUT_IS_DYNAMIC = True
@@ -193,20 +206,20 @@ class NS_FlexPreset:
                 return ([], [])
             else:
                 if instance:
-                    instance._dynamic_output_types = ["*"]
-                    instance._dynamic_output_names = ["output"]
+                    instance._dynamic_output_types = [ANY_TYPE]
+                    instance._dynamic_output_names = ["auto_setup"]
                     instance._panel_order = []
-                return (["*"], ["output"])
+                return ([ANY_TYPE], ["auto_setup"])
 
         presets_dir = Path(__file__).parent / "presets"
         yaml_path = presets_dir / select_yaml
 
         if not yaml_path.exists():
             if instance:
-                instance._dynamic_output_types = ["*"]
-                instance._dynamic_output_names = ["output"]
+                instance._dynamic_output_types = [ANY_TYPE]
+                instance._dynamic_output_names = ["auto_setup"]
                 instance._panel_order = []
-            return (["*"], ["output"])
+            return ([ANY_TYPE], ["auto_setup"])
         
         try:
             with open(yaml_path, 'r', encoding='utf-8') as f:
@@ -252,15 +265,14 @@ class NS_FlexPreset:
                             # Use wildcard type to avoid class-level conflicts
                             # between multiple FlexPreset nodes with different presets.
                             # Actual type info is in the output name suffix (_int/_float/_string).
-                            outputs.append("*")
+                            outputs.append(ANY_TYPE)
                             output_names.append(output_name)
         except Exception as e:
             print(f"Error reading YAML for dynamic outputs: {e}")
-        
-        # Always have at least one output
-        if not outputs:
-            outputs = ["*"]
-            output_names = ["output"]
+
+        # auto_setup is always the first output slot
+        outputs.insert(0, ANY_TYPE)
+        output_names.insert(0, "auto_setup")
 
         # Store dynamic types in instance and update class-level RETURN_TYPES
         if instance:
@@ -593,7 +605,116 @@ class NS_FlexPreset:
             # Don't refresh dynamic outputs here - just store the order
             
             return web.json_response({"success": True})
-    
+
+        @server.routes.post("/ns_flexpreset/value/bulk_add")
+        async def bulk_add_values(request):
+            """Bulk add values from target node's INPUT_TYPES"""
+            data = await request.json()
+            yaml_file = data.get("yaml", "")
+            title = data.get("title", "")
+            values = data.get("values", [])
+            node_id = data.get("node_id", None)
+
+            if not yaml_file or not title or not values:
+                return web.json_response({"success": False, "error": "Missing parameters"})
+
+            instance = NS_FlexPreset._get_instance()
+
+            # Ensure title exists
+            await instance._ensure_title_exists(yaml_file, title)
+
+            # Read current YAML to check existing keys
+            existing = instance._get_values_from_yaml(yaml_file, title)
+            added = 0
+
+            for entry in values:
+                key_name = entry.get("key_name", "")
+                key_type = entry.get("key_type", "string")
+                key_value = entry.get("key_value", "")
+                key_options = entry.get("options", None)
+                if not key_name or key_name in existing:
+                    continue  # Skip empty or duplicate keys
+                success = await instance._add_value(
+                    yaml_file, title, key_name, key_type, key_value,
+                    options=key_options
+                )
+                if success:
+                    added += 1
+
+            if added > 0:
+                instance.__class__.dynamic_output_types(yaml_file, title, title)
+                instance.refresh_enums()
+                updated_data = instance._get_prompt_data(yaml_file, title)
+                updated_data["refresh_outputs"] = True
+                updated_data["node_id"] = node_id
+                instance._ws_emit("ns_flexpreset_set_widgets", updated_data)
+
+            return web.json_response({"success": True, "added": added})
+
+        @server.routes.post("/ns_flexpreset/preset/delete")
+        async def delete_preset(request):
+            """Delete a preset (title) from YAML"""
+            data = await request.json()
+            yaml_file = data.get("yaml", "")
+            title = data.get("title", "")
+            node_id = data.get("node_id", None)
+
+            if not yaml_file or not title:
+                return web.json_response({"success": False, "error": "Missing parameters"})
+
+            instance = NS_FlexPreset._get_instance()
+            yaml_path = instance.presets_dir / yaml_file
+
+            try:
+                if not yaml_path.exists():
+                    return web.json_response({"success": False, "error": "YAML file not found"})
+
+                with open(yaml_path, 'r', encoding='utf-8') as f:
+                    yaml_data = yaml.load(f, Loader=OrderedLoader) or OrderedDict()
+
+                if title not in yaml_data:
+                    return web.json_response({"success": False, "error": "Preset not found"})
+
+                del yaml_data[title]
+                await instance._save_yaml(yaml_file, yaml_data)
+
+                instance._panel_order = []
+                instance.refresh_enums()
+
+                # Send empty widget data to clear panels
+                clear_data = {"title": "", "values": {}, "keys_order": [],
+                              "refresh_outputs": True, "node_id": node_id}
+                instance._ws_emit("ns_flexpreset_set_widgets", clear_data)
+
+                return web.json_response({"success": True})
+            except Exception as e:
+                print(f"Error deleting preset: {e}")
+                return web.json_response({"success": False, "error": str(e)})
+
+        @server.routes.post("/ns_flexpreset/yaml/create")
+        async def create_yaml(request):
+            """Create a new empty YAML file"""
+            data = await request.json()
+            yaml_name = data.get("yaml", "")
+            node_id = data.get("node_id", None)
+
+            if not yaml_name:
+                return web.json_response({"success": False, "error": "Missing YAML name"})
+
+            instance = NS_FlexPreset._get_instance()
+            yaml_path = instance.presets_dir / yaml_name
+
+            if yaml_path.exists():
+                return web.json_response({"success": False, "error": "YAML file already exists"})
+
+            try:
+                await instance._save_yaml(yaml_name, OrderedDict())
+                instance.refresh_enums()
+                return web.json_response({"success": True})
+            except Exception as e:
+                print(f"Error creating YAML: {e}")
+                return web.json_response({"success": False, "error": str(e)})
+
     def _get_prompt_data(self, yaml_file: str, title: str) -> Dict[str, Any]:
         """Get prompt data from YAML"""
         yaml_path = self.presets_dir / yaml_file
@@ -668,7 +789,8 @@ class NS_FlexPreset:
             return False
     
     async def _add_value(self, yaml_file: str, title: str, key_name: str,
-                        key_type: str, key_value: str) -> bool:
+                        key_type: str, key_value: str,
+                        options: list = None) -> bool:
         """Add a value to YAML preserving order"""
         yaml_path = self.presets_dir / yaml_file
 
@@ -685,18 +807,21 @@ class NS_FlexPreset:
             elif not isinstance(data[title], OrderedDict):
                 # Convert to OrderedDict if needed
                 data[title] = OrderedDict(data[title])
-            
+
             if "values" not in data[title]:
                 data[title]["values"] = OrderedDict()
             elif not isinstance(data[title]["values"], OrderedDict):
                 # Convert values to OrderedDict if needed
                 data[title]["values"] = OrderedDict(data[title]["values"])
-            
+
             # Add value with OrderedDict
-            data[title]["values"][key_name] = OrderedDict([
+            entry = OrderedDict([
                 ("type", key_type),
                 ("value", key_value)
             ])
+            if options and key_type == "list":
+                entry["options"] = list(options)
+            data[title]["values"][key_name] = entry
             
             # Save with order preserved
             await self._save_yaml(yaml_file, data)
@@ -828,7 +953,7 @@ class NS_FlexPreset:
                                 output_values.append(int(value))
                             elif value_type == 'float':
                                 output_values.append(float(value))
-                            else:  # string
+                            else:  # string, list
                                 output_values.append(str(value))
                         except (ValueError, TypeError) as e:
                             # Error handling for type conversion
@@ -836,8 +961,11 @@ class NS_FlexPreset:
                             print(error_msg)
                             raise ValueError(error_msg) from e
         
+        # auto_setup slot is always the first output (pass-through, unused value)
+        output_values.insert(0, "")
+
         # FIX: Ensure we have at least one output
-        if not output_values:
+        if len(output_values) < 2:
             output_values = [""]
         
         # FIX: Ensure output count matches declared types exactly
