@@ -6,6 +6,94 @@ const TEXTAREA_H = 60;
 // グローバル変数として追加
 let isLoadingWorkflow = false;
 
+// Auto Setup: ComfyUI type → FlexPreset type mapping
+function mapComfyTypeToFlexType(comfyType, config) {
+    if (Array.isArray(comfyType)) {
+        // ENUM/combo list → list type with options
+        return {
+            type: "list",
+            value: String(config?.default ?? comfyType[0] ?? ""),
+            options: comfyType.map(String)
+        };
+    }
+    switch (comfyType) {
+        case "INT": return { type: "int", value: String(config?.default ?? 0) };
+        case "FLOAT": return { type: "float", value: String(config?.default ?? 0.0) };
+        case "STRING": return { type: "string", value: String(config?.default ?? "") };
+        case "BOOLEAN": return { type: "list", value: config?.default ? "True" : "False", options: ["True", "False"] };
+        default: return null; // MODEL, CONDITIONING, LATENT etc. → skip
+    }
+}
+
+// Auto Setup: Import target node's inputs as FlexPreset YAML entries
+async function autoSetupFromTargetNode(node, targetNode) {
+    const yamlFile = node._nsFlexPresetWidgets?.select_yaml?.value;
+    const title = node._nsFlexPresetWidgets?.input_preset_name?.value
+        || node._nsFlexPresetWidgets?.select_preset?.value;
+
+    if (!yamlFile || !title) return;
+
+    const targetClass = targetNode.comfyClass || targetNode.type;
+    if (!targetClass) return;
+
+    // Fetch target node's INPUT_TYPES from ComfyUI
+    let objectInfo;
+    try {
+        const resp = await api.fetchApi(`/object_info/${targetClass}`);
+        objectInfo = await resp.json();
+    } catch (e) {
+        console.error("Auto Setup: Failed to fetch object_info", e);
+        return;
+    }
+
+    const nodeInfo = objectInfo[targetClass];
+    if (!nodeInfo?.input) return;
+
+    // Collect importable inputs (INT, FLOAT, STRING, BOOLEAN, ENUM)
+    const entries = [];
+    for (const section of ["required", "optional"]) {
+        const inputs = nodeInfo.input[section];
+        if (!inputs) continue;
+        for (const [name, spec] of Object.entries(inputs)) {
+            const comfyType = Array.isArray(spec) ? spec[0] : spec;
+            const config = Array.isArray(spec) && spec.length > 1 ? spec[1] : {};
+            const mapped = mapComfyTypeToFlexType(comfyType, config);
+            if (mapped) {
+                const entry = { key_name: name, key_type: mapped.type, key_value: mapped.value };
+                if (mapped.options) entry.options = mapped.options;
+                entries.push(entry);
+            }
+        }
+    }
+
+    if (entries.length === 0) return;
+
+    // Bulk add via backend
+    try {
+        const resp = await api.fetchApi("/ns_flexpreset/value/bulk_add", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                yaml: yamlFile,
+                title: title,
+                values: entries,
+                node_id: node.id
+            })
+        });
+        const result = await resp.json();
+        if (result.success && result.added > 0) {
+            console.log(`Auto Setup: Added ${result.added} entries from ${targetClass}`);
+            // Store pending auto-wire info for updateNodeWidgets to execute
+            node._pendingAutoWire = {
+                targetNodeId: targetNode.id,
+                entries: entries
+            };
+        }
+    } catch (e) {
+        console.error("Auto Setup: Failed to bulk add", e);
+    }
+}
+
 // NS-FlexPreset Extension
 app.registerExtension({
     name: "NS.FlexPreset",
@@ -14,7 +102,8 @@ app.registerExtension({
     TYPE_REGEX: {
         'int': /^-?[0-9]+$/,
         'float': /^-?[0-9]*\.?[0-9]+$/,
-        'string': /.*/
+        'string': /.*/,
+        'list': /.*/
     },
     
     async setup() {
@@ -69,10 +158,12 @@ app.registerExtension({
             select_value: null,
             btn_add_value: null,
             btn_del_value: null,
+            btn_del_preset: null,
+            btn_add_yaml: null,
             outputs_signature: "",
             user_resized: false,
             textareas: [],
-            panel_order: []  // ★追加: panel_orderを初期化
+            panel_order: []
         };
         
         // Find existing widgets
@@ -224,10 +315,39 @@ app.registerExtension({
             nodeType.prototype.onExecuted = function(message) {
                 // Update dynamic outputs
                 updateNodeOutputs(this, true);
-                
+
                 // Call original if exists
                 if (onExecuted) {
                     onExecuted.apply(this, arguments);
+                }
+            };
+
+            // Allow output slots to connect to any input type
+            nodeType.prototype.onConnectOutput = function(outputIndex, inputType, inputSlot, targetNode, targetSlot) {
+                return true;
+            };
+
+            // Auto Setup: detect output connections from auto_setup slot (index 0)
+            const onConnectionsChange = nodeType.prototype.onConnectionsChange;
+            nodeType.prototype.onConnectionsChange = function(type, slotIndex, isConnected, link_info, ioSlot) {
+                if (onConnectionsChange) {
+                    onConnectionsChange.apply(this, arguments);
+                }
+                // type=2 means OUTPUT side, slotIndex=0 is auto_setup slot
+                if (type === 2 && slotIndex === 0 && isConnected && link_info && !isLoadingWorkflow) {
+                    const targetNode = app.graph.getNodeById(link_info.target_id);
+                    if (targetNode && targetNode.comfyClass !== "NS-FlexPreset") {
+                        const linkId = link_info.id;
+                        const self = this;
+                        // Run auto setup then disconnect the wire
+                        autoSetupFromTargetNode(this, targetNode).then(() => {
+                            // Disconnect the auto_setup wire after import
+                            if (linkId != null) {
+                                app.graph.removeLink(linkId);
+                            }
+                            app.graph.setDirtyCanvas(true);
+                        });
+                    }
                 }
             };
         }
@@ -321,7 +441,8 @@ function validateValueType(type, value) {
     const regex = {
         'int': /^-?[0-9]+$/,
         'float': /^-?[0-9]*\.?[0-9]+$/,
-        'string': /.*/
+        'string': /.*/,
+        'list': /.*/
     };
     
     if (!regex[type]) return false;
@@ -443,33 +564,44 @@ function addCustomWidgets(node) {
         "select_value",
         "",
         (v) => {
-            // Update delete button label
             if (node._nsFlexPresetWidgets.btn_del_value) {
-                node._nsFlexPresetWidgets.btn_del_value.name = v ? `Delete [${v}]` : "Delete Value";
+                node._nsFlexPresetWidgets.btn_del_value.name = v ? `- Del [${v}]` : "- Del Value";
             }
         },
         { values: [""], serialize: false }
     );
     node._nsFlexPresetWidgets.select_value = selectValue;
     
-    // Add buttons
+    // Add Value / Delete Value buttons
     const btnAdd = node.addWidget(
-        "button",
-        "Add Value",
-        null,
+        "button", "+ Add Value", null,
         () => { addValuePanel(node); },
         { serialize: false }
     );
     node._nsFlexPresetWidgets.btn_add_value = btnAdd;
-    
+
     const btnDel = node.addWidget(
-        "button", 
-        "Delete Value",
-        null,
+        "button", "- Del Value", null,
         () => { deleteValue(node); },
         { serialize: false }
     );
     node._nsFlexPresetWidgets.btn_del_value = btnDel;
+
+    // Delete Preset button
+    const btnDelPreset = node.addWidget(
+        "button", "Delete Preset", null,
+        () => { deletePreset(node); },
+        { serialize: false }
+    );
+    node._nsFlexPresetWidgets.btn_del_preset = btnDelPreset;
+
+    // Add YAML button
+    const btnAddYaml = node.addWidget(
+        "button", "+ Add YAML", null,
+        () => { addYamlFile(node); },
+        { serialize: false }
+    );
+    node._nsFlexPresetWidgets.btn_add_yaml = btnAddYaml;
 }
 
 function updateNodeEnums(data) {
@@ -614,18 +746,48 @@ function updateNodeWidgets(data) {
         
         // 出力情報が含まれている場合は強制的に更新
         if (data.outputs && data.output_names) {
-            // 出力を手動で設定
-            while (node.outputs.length > 0) {
-                node.removeOutput(0);
+            // Store existing connections before removing outputs
+            const existingConnections = [];
+            for (let i = 0; i < node.outputs.length; i++) {
+                const output = node.outputs[i];
+                if (output && output.links && output.links.length > 0) {
+                    for (const linkId of [...output.links]) {
+                        const link = app.graph.links[linkId];
+                        if (link) {
+                            existingConnections.push({
+                                outputName: output.name,
+                                target_id: link.target_id,
+                                target_slot: link.target_slot
+                            });
+                        }
+                    }
+                }
             }
 
-            for (let i = 0; i < data.outputs.length; i++) {
-                const outputType = data.outputs[i];
-                const outputName = data.output_names[i];
-                node.addOutput(outputName, outputType);
+            // Rebuild outputs
+            node._rebuildingOutputs = true;
+            try {
+                while (node.outputs.length > 0) {
+                    node.removeOutput(0);
+                }
+                for (let i = 0; i < data.outputs.length; i++) {
+                    node.addOutput(data.output_names[i], data.outputs[i]);
+                }
+            } finally {
+                node._rebuildingOutputs = false;
             }
 
-            // グラフを更新
+            // Restore connections by matching output name
+            for (const conn of existingConnections) {
+                if (conn.outputName === "auto_setup") continue;
+                const newIdx = node.outputs.findIndex(o => o.name === conn.outputName);
+                if (newIdx >= 0) {
+                    try {
+                        node.connect(newIdx, conn.target_id, conn.target_slot);
+                    } catch (e) { /* skip */ }
+                }
+            }
+
             app.graph.setDirtyCanvas(true);
         } else if (isFullRefresh) {
             // 通常の更新
@@ -637,6 +799,28 @@ function updateNodeWidgets(data) {
         node._nsFlexPresetWidgets.user_resized = false;
         const computed = node.computeSize();
         node.setSize([Math.max(node.size[0], computed[0]), computed[1]]);
+
+        // Auto-wire: connect outputs to target node after output rebuild
+        if (node._pendingAutoWire) {
+            const { targetNodeId, entries } = node._pendingAutoWire;
+            delete node._pendingAutoWire;
+            const targetNode = app.graph.getNodeById(targetNodeId);
+            if (targetNode) {
+                for (const entry of entries) {
+                    const outputName = `${entry.key_name}_${entry.key_type}`;
+                    const outputIdx = node.outputs.findIndex(o => o.name === outputName);
+                    const inputIdx = targetNode.inputs?.findIndex(i => i.name === entry.key_name);
+                    if (outputIdx >= 0 && inputIdx >= 0) {
+                        try {
+                            node.connect(outputIdx, targetNodeId, inputIdx);
+                        } catch (e) {
+                            console.warn(`Auto-wire: Failed to connect ${outputName} → ${entry.key_name}:`, e);
+                        }
+                    }
+                }
+                app.graph.setDirtyCanvas(true);
+            }
+        }
     }
 }
 
@@ -700,8 +884,8 @@ function createValuePanel(node, key, valueData, isNewValue = false) {
         if (bottomSeparatorIdx >= 0) {
             insertIdx = bottomSeparatorIdx;
         } else {
-            // Fallback: 5 widgets from end (bottom_separator, select_value, btn_add, btn_del)
-            insertIdx = Math.max(0, node.widgets.length - 4);
+            // Fallback: widgets from end (bottom_separator, select_value, btn_add, btn_del, btn_del_preset, btn_add_yaml)
+            insertIdx = Math.max(0, node.widgets.length - 6);
         }
     } else {
         // For existing values from YAML, also append at bottom to maintain order
@@ -777,14 +961,24 @@ function createValuePanel(node, key, valueData, isNewValue = false) {
         `Type`,
         valueData.type || "string",
         (v) => { updateValueType(node, key, v); },
-        { values: ["int", "float", "string"], serialize: false }
+        { values: ["int", "float", "string", "list"], serialize: false }
     );
-    
+
     // Add value input based on type
     let valueWidget;
     const currentValue = valueData.value || "";
-    
-    if (valueData.type === 'int') {
+
+    if (valueData.type === 'list') {
+        // Use combo widget for list/enum type
+        const options = valueData.options || [currentValue];
+        valueWidget = node.addWidget(
+            "combo",
+            `Value`,
+            currentValue || options[0] || "",
+            (v) => { updateValueContent(node, key, v); },
+            { values: options, serialize: false }
+        );
+    } else if (valueData.type === 'int') {
         // Use number widget with integer precision
         const intValue = parseInt(currentValue) || 0;
         valueWidget = node.addWidget(
@@ -1100,6 +1294,87 @@ async function deleteValue(node) {
     }
 }
 
+// Delete current preset (title) from YAML
+async function deletePreset(node) {
+    const yamlFile = node._nsFlexPresetWidgets.select_yaml?.value;
+    const title = node._nsFlexPresetWidgets.input_preset_name?.value
+        || node._nsFlexPresetWidgets.select_preset?.value;
+
+    if (!yamlFile || !title) {
+        alert("No preset selected to delete");
+        return;
+    }
+
+    if (!confirm(`Delete preset "${title}" from ${yamlFile}?`)) {
+        return;
+    }
+
+    try {
+        const response = await api.fetchApi("/ns_flexpreset/preset/delete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                yaml: yamlFile,
+                title: title,
+                node_id: node.id
+            })
+        });
+        const result = await response.json();
+        if (result.success) {
+            // Clear input and let websocket update handle the rest
+            if (node._nsFlexPresetWidgets.input_preset_name) {
+                node._nsFlexPresetWidgets.input_preset_name.value = "";
+            }
+            if (node._nsFlexPresetWidgets.select_preset) {
+                node._nsFlexPresetWidgets.select_preset.value = "";
+            }
+            app.graph.setDirtyCanvas(true);
+        } else {
+            alert("Failed to delete preset");
+        }
+    } catch (error) {
+        console.error("Error deleting preset:", error);
+        alert("Error deleting preset");
+    }
+}
+
+// Create a new YAML file
+async function addYamlFile(node) {
+    const name = prompt("Enter YAML file name (without .yaml extension):");
+    if (!name || !name.trim()) return;
+
+    const sanitized = name.trim().replace(/[^a-zA-Z0-9_\-]/g, "_");
+    const fileName = sanitized.endsWith(".yaml") ? sanitized : sanitized + ".yaml";
+
+    try {
+        const response = await api.fetchApi("/ns_flexpreset/yaml/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                yaml: fileName,
+                node_id: node.id
+            })
+        });
+        const result = await response.json();
+        if (result.success) {
+            // Select the new YAML file
+            if (node._nsFlexPresetWidgets.select_yaml) {
+                node._nsFlexPresetWidgets.select_yaml.value = fileName;
+                // Trigger callback to load titles
+                if (node._nsFlexPresetWidgets.select_yaml.callback) {
+                    node._nsFlexPresetWidgets.select_yaml.callback(fileName);
+                }
+            }
+            app.graph.setDirtyCanvas(true);
+        } else {
+            alert(result.error || "Failed to create YAML file");
+        }
+    } catch (error) {
+        console.error("Error creating YAML:", error);
+        alert("Error creating YAML file");
+    }
+}
+
 // Update key name
 async function updateKeyName(node, oldKey, newKey) {
     if (!newKey || newKey === oldKey) return;
@@ -1215,7 +1490,18 @@ async function updateValueType(node, key, newType) {
     
     // Create new widget based on type
     let newValueWidget;
-    if (newType === 'int') {
+    if (newType === 'list') {
+        // Use combo widget for list/enum type
+        // When switching to list manually, use current value as only option
+        const options = [currentValue || ""];
+        newValueWidget = node.addWidget(
+            "combo",
+            valueWidgetName,
+            currentValue || "",
+            (v) => { updateValueContent(node, key, v); },
+            { values: options, serialize: false }
+        );
+    } else if (newType === 'int') {
         // Use number widget with integer precision
         const intValue = parseInt(currentValue) || 0;
         newValueWidget = node.addWidget(
@@ -1418,22 +1704,23 @@ async function updateValueContent(node, key, newValue) {
 }
 
 function updateNodeOutputsForTypeChange(node, changedIndex, newType) {
-    // Only update the specific output that changed
-    if (changedIndex >= 0 && changedIndex < node.outputs.length) {
+    // Output index is panel index + 1 (auto_setup is always at index 0)
+    const outputIndex = changedIndex + 1;
+    if (changedIndex >= 0 && outputIndex < node.outputs.length) {
         const panel = node._nsFlexPresetWidgets.value_panels[changedIndex];
         if (!panel) return;
-        
+
         const outputName = `${panel.key}_${newType}`;
         let outputType = "STRING";
-        
+
         if (newType === "int") {
             outputType = "INT";
         } else if (newType === "float") {
             outputType = "FLOAT";
         }
-        
+
         // Store connections from this output
-        const output = node.outputs[changedIndex];
+        const output = node.outputs[outputIndex];
         const connections = [];
         if (output && output.links) {
             for (const linkId of output.links) {
@@ -1456,7 +1743,7 @@ function updateNodeOutputsForTypeChange(node, changedIndex, newType) {
         }
         
         // Update the output
-        node.outputs[changedIndex] = {
+        node.outputs[outputIndex] = {
             name: outputName,
             type: outputType,
             links: [],
@@ -1471,6 +1758,9 @@ function updateNodeOutputsForTypeChange(node, changedIndex, newType) {
 }
 
 function updateNodeOutputs(node, forceUpdate = false) {
+    // Prevent re-entrant calls during output rebuild
+    if (node._rebuildingOutputs) return;
+
     // ワークフローロード中の特別な処理
     if (node._skipOutputUpdate) {
         console.log("Skipping output update due to workflow load");
@@ -1517,38 +1807,48 @@ function updateNodeOutputs(node, forceUpdate = false) {
         }
     }
     
-    // Clear existing outputs
-    while (node.outputs.length > 0) {
-        node.removeOutput(0);
-    }
-    
-    // Add new outputs based on value panels
-    const panels = node._nsFlexPresetWidgets.value_panels;
-    
-    if (panels && panels.length > 0) {
-        for (const panel of panels) {
-            const typeWidget = panel.widgets.find(w => w.name === "Type");
-            if (typeWidget) {
-                const type = typeWidget.value;
-                const outputName = `${panel.key}_${type}`;
-                
-                if (type === "int") {
-                    node.addOutput(outputName, "INT");
-                } else if (type === "float") {
-                    node.addOutput(outputName, "FLOAT");
-                } else {
-                    node.addOutput(outputName, "STRING");
+    // Guard against re-entrant calls from removeOutput triggering onConnectionsChange
+    node._rebuildingOutputs = true;
+
+    try {
+        // Clear existing outputs
+        while (node.outputs.length > 0) {
+            node.removeOutput(0);
+        }
+
+        // auto_setup is always the first output slot
+        node.addOutput("auto_setup", "*");
+
+        // Add outputs based on value panels
+        const panels = node._nsFlexPresetWidgets.value_panels;
+
+        if (panels && panels.length > 0) {
+            for (const panel of panels) {
+                const typeWidget = panel.widgets.find(w => w.name === "Type");
+                if (typeWidget) {
+                    const type = typeWidget.value;
+                    const outputName = `${panel.key}_${type}`;
+
+                    if (type === "int") {
+                        node.addOutput(outputName, "INT");
+                    } else if (type === "float") {
+                        node.addOutput(outputName, "FLOAT");
+                    } else {
+                        node.addOutput(outputName, "STRING");
+                    }
                 }
             }
         }
-    } else {
-        // パネルがない場合のみデフォルト出力を追加
-        node.addOutput("output", "STRING");
+    } finally {
+        node._rebuildingOutputs = false;
     }
-    
-    // Restore connections where possible
+
+    // Restore connections where possible (by matching output name)
     for (const conn of existingConnections) {
-        // Try to find matching output by name
+        // Skip auto_setup slot connections
+        if (conn.outputName === "auto_setup") continue;
+
+        // Find matching output by name
         let newOutputIndex = -1;
         for (let i = 0; i < node.outputs.length; i++) {
             if (node.outputs[i].name === conn.outputName) {
@@ -1556,18 +1856,7 @@ function updateNodeOutputs(node, forceUpdate = false) {
                 break;
             }
         }
-        
-        // If exact match not found, try to match by index if same type
-        if (newOutputIndex === -1 && conn.outputIndex < node.outputs.length) {
-            const oldType = conn.outputName.split('_').pop();
-            const newOutput = node.outputs[conn.outputIndex];
-            const newType = newOutput.name.split('_').pop();
-            
-            if (oldType === newType) {
-                newOutputIndex = conn.outputIndex;
-            }
-        }
-        
+
         // Restore connection if found
         if (newOutputIndex >= 0) {
             try {

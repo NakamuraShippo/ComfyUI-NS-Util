@@ -1,0 +1,34 @@
+Cross-Attention Map Recycler:
+  values:
+    collection_end:
+      type: float
+      value: '0.15'
+    injection_start:
+      type: float
+      value: '0.8'
+    injection_strength:
+      type: float
+      value: '0.1'
+    decay:
+      type: float
+      value: '0.05'
+    collection_momentum:
+      type: float
+      value: '0.7'
+Micro Conditioning Schedule:
+  values:
+    start_original_size:
+      type: int
+      value: '4096'
+    end_original_size:
+      type: int
+      value: '192'
+    start_crop_offset:
+      type: int
+      value: '0'
+    end_crop_offset:
+      type: int
+      value: '0'
+    switch_step:
+      type: float
+      value: '0.49'
