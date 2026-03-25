@@ -31,6 +31,7 @@ const ACTION_BAR_MARGIN = 16;
 const ACTION_BAR_GAP = 8;
 const ACTION_ADD_BUTTON_MIN_WIDTH = 44;
 const ACTION_DELETE_BUTTON_MIN_WIDTH = 58;
+const ACTION_NEWYAML_BUTTON_MIN_WIDTH = 72;
 const PROMPTLIST_DEFAULT_WIDTH = 320;
 const PROMPTLIST_DEFAULT_HEIGHT = 300;
 
@@ -182,6 +183,10 @@ function createActionButton(label, kind, minWidth, onClick) {
     button.style.boxSizing = "border-box";
     button.style.pointerEvents = "auto";
 
+    button.addEventListener("pointerdown", (event) => {
+        event.stopPropagation();
+    });
+
     button.addEventListener("mousedown", (event) => {
         event.stopPropagation();
     });
@@ -243,8 +248,11 @@ function createActionWidget() {
                 const deleteButton = createActionButton("Delete", "delete", ACTION_DELETE_BUTTON_MIN_WIDTH, () => {
                     void handleDeleteAction(nodeRef);
                 });
+                const newYamlButton = createActionButton("New YAML", "add", ACTION_NEWYAML_BUTTON_MIN_WIDTH, () => {
+                    void handleNewYamlAction(nodeRef);
+                });
 
-                actionBar.append(addButton, deleteButton);
+                actionBar.append(addButton, deleteButton, newYamlButton);
                 canvasParent.appendChild(actionBar);
 
                 this.actionBar = actionBar;
@@ -293,6 +301,43 @@ async function handleDeleteAction(node) {
 
     await reloadYamlList();
     applyPromptState(node, yamlWidget.value, result);
+}
+
+async function handleNewYamlAction(node) {
+    const name = prompt("Enter YAML file name (without .yaml extension):");
+    if (!name || !name.trim()) return;
+
+    const sanitized = name.trim().replace(/[^a-zA-Z0-9_\-]/g, "_");
+    const fileName = sanitized.endsWith(".yaml") ? sanitized : sanitized + ".yaml";
+
+    try {
+        const response = await api.fetchApi("/ns_promptlist/create_yaml", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                yaml: fileName,
+                node_id: node.id
+            })
+        });
+        const result = await response.json();
+        if (result.success) {
+            applyEnumData(result);
+            const yamlWidget = findWidget(node, "select_yaml");
+            if (yamlWidget) {
+                yamlWidget.options.values = promptListStore.yamlFiles;
+                yamlWidget.value = fileName;
+                if (yamlWidget.callback) {
+                    yamlWidget.callback(fileName);
+                }
+            }
+            refreshNode(node);
+        } else {
+            alert(result.error || "Failed to create YAML file");
+        }
+    } catch (error) {
+        console.error("Error creating YAML:", error);
+        alert("Error creating YAML file");
+    }
 }
 
 function updatePromptListStore(yamlFile, titles) {
@@ -576,6 +621,23 @@ function hookSelectChange(node) {
             }
 
             schedulePromptListNodeSizeRestore(node, lockedSize);
+        };
+    }
+
+    // Hook prompt widget change for auto-save (debounced)
+    const promptWidget = findWidget(node, "prompt");
+    if (promptWidget) {
+        promptWidget.callback = function() {
+            const title = selectWidget?.value || findWidget(node, "title")?.value;
+            if (!yamlWidget?.value || !title) return;
+
+            if (node._nsPromptListSaveTimer) {
+                clearTimeout(node._nsPromptListSaveTimer);
+            }
+            node._nsPromptListSaveTimer = setTimeout(() => {
+                node._nsPromptListSaveTimer = null;
+                void addTitle(yamlWidget.value, title, promptWidget.value, node.id);
+            }, 500);
         };
     }
 }
