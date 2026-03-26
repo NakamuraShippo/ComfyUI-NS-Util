@@ -81,7 +81,7 @@ class SimpleLLMAddDocument:
         
         try:
             meta = json.loads(metadata)
-        except:
+        except (json.JSONDecodeError, ValueError):
             meta = {}
         store["metadata"][doc_id] = meta
         
@@ -90,31 +90,33 @@ class SimpleLLMAddDocument:
         return (store,)
 
 class SimpleLLMRAGQuery:
-    """RAGを使用したクエリ実行"""
-    
+    """RAGを使用したクエリ実行。
+    ドキュメントコンテキストを含むプロンプトを生成し、
+    SimpleLLMRunPrompt に渡して実行する設計です。"""
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "agent": ("AGENT",),
                 "vector_store": ("VECTOR_STORE",),
                 "query": ("STRING", {"multiline": True}),
                 "top_k": ("INT", {"default": 3, "min": 1, "max": 10}),
             }
         }
-    
+
     RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("rag_prompt",)
     FUNCTION = "query_rag"
     CATEGORY = "NS/LLM/RAG"
-    
-    def query_rag(self, agent, vector_store, query, top_k):
+
+    def query_rag(self, vector_store, query, top_k):
         docs = list(vector_store.get("documents", {}).values())[:top_k]
-        
+
         if not docs:
-            return ("No documents found in vector store.",)
-        
+            return (f"No documents found in vector store. Original query: {query}",)
+
         context = "\n\n".join([f"Document {i+1}:\n{doc}" for i, doc in enumerate(docs)])
-        
+
         rag_prompt = f"""Based on the following context, answer the query.
 
 Context:
@@ -123,7 +125,7 @@ Context:
 Query: {query}
 
 Answer:"""
-        
+
         return (rag_prompt,)
 
 # ============================================
@@ -131,43 +133,37 @@ Answer:"""
 # ============================================
 
 class SimpleLLMChainOfThought:
-    """Chain of Thought推論を実行"""
-    
+    """Chain of Thought推論プロンプトを生成。
+    出力を SimpleLLMRunPrompt に渡して実行する設計です。"""
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "agent": ("AGENT",),
                 "problem": ("STRING", {"multiline": True}),
                 "steps": ("INT", {"default": 3, "min": 1, "max": 10}),
             }
         }
-    
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("reasoning", "answer")
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("cot_prompt",)
     FUNCTION = "chain_of_thought"
     CATEGORY = "NS/LLM/Advanced"
-    
-    def chain_of_thought(self, agent, problem, steps):
+
+    def chain_of_thought(self, problem, steps):
         cot_prompt = f"""Solve this problem step by step.
 
 Problem: {problem}
 
 Let's think through this in {steps} steps:
 """
-        
+
         for i in range(1, steps + 1):
             cot_prompt += f"\nStep {i}: [Describe step {i} of your reasoning]"
-        
+
         cot_prompt += "\n\nFinal Answer: [Your conclusive answer based on the above reasoning]"
-        
-        reasoning = f"Chain of Thought reasoning for: {problem}\n"
-        reasoning += f"Using {steps} reasoning steps.\n"
-        reasoning += "Note: Actual reasoning requires LLM execution."
-        
-        answer = "Final answer would appear here after LLM processing."
-        
-        return (reasoning, answer)
+
+        return (cot_prompt,)
 
 # ============================================
 # Memory Management

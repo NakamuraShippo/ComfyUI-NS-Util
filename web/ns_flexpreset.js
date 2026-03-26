@@ -764,14 +764,23 @@ function updateNodeWidgets(data) {
                 }
             }
 
-            // Rebuild outputs
+            // Rebuild outputs with concrete types derived from output name suffix
             node._rebuildingOutputs = true;
             try {
                 while (node.outputs.length > 0) {
                     node.removeOutput(0);
                 }
                 for (let i = 0; i < data.outputs.length; i++) {
-                    node.addOutput(data.output_names[i], data.outputs[i]);
+                    const name = data.output_names[i];
+                    let type = data.outputs[i];
+                    // Resolve concrete LiteGraph type from the _type suffix
+                    if (name !== "auto_setup") {
+                        if (name.endsWith("_int")) type = "INT";
+                        else if (name.endsWith("_float")) type = "FLOAT";
+                        else if (name.endsWith("_list")) type = "*";  // wildcard for combo inputs
+                        else type = "STRING";
+                    }
+                    node.addOutput(name, type);
                 }
             } finally {
                 node._rebuildingOutputs = false;
@@ -1253,10 +1262,6 @@ async function deleteValue(node) {
         return;
     }
     
-    if (!confirm(`Delete value "${keyName}"?`)) {
-        return;
-    }
-    
     try {
         const response = await api.fetchApi("/ns_flexpreset/value/delete", {
             method: "POST",
@@ -1273,19 +1278,8 @@ async function deleteValue(node) {
         if (!result.success) {
             alert("Failed to delete value");
         } else {
-            // Clear selection and wait for websocket update
+            // Clear selection and wait for websocket update to rebuild panels/outputs
             node._nsFlexPresetWidgets.select_value.value = "";
-            // Don't call loadPromptData, wait for websocket update
-            
-            // C3: Update panel order after deletion
-            // Remove the deleted panel from our local list
-            const panelIdx = node._nsFlexPresetWidgets.value_panels.findIndex(p => p.key === keyName);
-            if (panelIdx >= 0) {
-                node._nsFlexPresetWidgets.value_panels.splice(panelIdx, 1);
-                sendPanelOrder(node);
-            }
-            
-            // Force refresh node graph
             app.graph.setDirtyCanvas(true);
         }
     } catch (error) {
@@ -1717,6 +1711,8 @@ function updateNodeOutputsForTypeChange(node, changedIndex, newType) {
             outputType = "INT";
         } else if (newType === "float") {
             outputType = "FLOAT";
+        } else if (newType === "list") {
+            outputType = "*";
         }
 
         // Store connections from this output
@@ -1833,6 +1829,8 @@ function updateNodeOutputs(node, forceUpdate = false) {
                         node.addOutput(outputName, "INT");
                     } else if (type === "float") {
                         node.addOutput(outputName, "FLOAT");
+                    } else if (type === "list") {
+                        node.addOutput(outputName, "*");
                     } else {
                         node.addOutput(outputName, "STRING");
                     }

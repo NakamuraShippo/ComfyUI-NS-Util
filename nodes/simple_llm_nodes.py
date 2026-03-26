@@ -49,7 +49,7 @@ class OpenAIDriver(BaseDriver):
     """OpenAI APIドライバー（requestsベース実装）"""
     API_KEY_ENV = "OPENAI_API_KEY"
     
-    def complete(self, prompt: str, model: str = "gpt-3.5-turbo", **kwargs) -> str:
+    def complete(self, prompt: str, model: str = "gpt-4.1-mini", **kwargs) -> str:
         """OpenAI APIを使用してテキスト生成"""
         if not self.api_key:
             return "Error: OpenAI API key not set. Please set OPENAI_API_KEY environment variable or provide api_key."
@@ -88,14 +88,14 @@ class ClaudeDriver(BaseDriver):
     """Anthropic Claude APIドライバー"""
     API_KEY_ENV = "ANTHROPIC_API_KEY"
     
-    def complete(self, prompt: str, model: str = "claude-3-sonnet-20240229", **kwargs) -> str:
+    def complete(self, prompt: str, model: str = "claude-sonnet-4-6", **kwargs) -> str:
         """Claude APIを使用してテキスト生成"""
         if not self.api_key:
             return "Error: Anthropic API key not set. Please set ANTHROPIC_API_KEY environment variable or provide api_key."
         
         headers = {
             "x-api-key": self.api_key,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": "2024-10-22",
             "Content-Type": "application/json"
         }
         
@@ -128,7 +128,7 @@ class GeminiDriver(BaseDriver):
     """Google Gemini APIドライバー"""
     API_KEY_ENV = "GOOGLE_API_KEY"
     
-    def complete(self, prompt: str, model: str = "gemini-pro", **kwargs) -> str:
+    def complete(self, prompt: str, model: str = "gemini-2.5-flash", **kwargs) -> str:
         """Gemini APIを使用してテキスト生成"""
         if not self.api_key:
             return "Error: Google API key not set. Please set GOOGLE_API_KEY environment variable or provide api_key."
@@ -140,21 +140,25 @@ class GeminiDriver(BaseDriver):
         }
         
         system_prompt = kwargs.get("system_prompt", "")
-        full_prompt = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-        
+
         data = {
             "contents": [
                 {
                     "parts": [
-                        {"text": full_prompt}
+                        {"text": prompt}
                     ]
                 }
             ],
             "generationConfig": {
                 "temperature": kwargs.get("temperature", 0.7),
-                "maxOutputTokens": kwargs.get("max_tokens", 1000),
+                "maxOutputTokens": kwargs.get("max_tokens", 2000),
             }
         }
+
+        if system_prompt:
+            data["system_instruction"] = {
+                "parts": [{"text": system_prompt}]
+            }
         
         try:
             response = requests.post(
@@ -179,29 +183,39 @@ class OllamaDriver(BaseDriver):
     def complete(self, prompt: str, model: str = "llama3", **kwargs) -> str:
         """Ollama APIを使用してテキスト生成"""
         try:
-            # モデルが利用可能か確認
+            # モデルが利用可能か確認（タグなし名にも対応）
             list_response = requests.get(f"{self.base_url}/api/tags", timeout=5)
             if list_response.status_code == 200:
                 available_models = [m.get("name", "") for m in list_response.json().get("models", [])]
-                if model not in available_models and available_models:
+                # タグなし名（例: "llama3"）でもタグ付き名（例: "llama3:latest"）にマッチさせる
+                model_found = any(
+                    m == model or m.split(":")[0] == model
+                    for m in available_models
+                )
+                if not model_found and available_models:
                     return f"Error: Model '{model}' not found. Available models: {', '.join(available_models)}"
-            
+
             system_prompt = kwargs.get("system_prompt", "")
+
+            options = {
+                "temperature": kwargs.get("temperature", 0.7)
+            }
+            max_tokens = kwargs.get("max_tokens")
+            if max_tokens:
+                options["num_predict"] = max_tokens
+
+            request_body = {
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": options
+            }
             if system_prompt:
-                full_prompt = f"{system_prompt}\n\n{prompt}"
-            else:
-                full_prompt = prompt
-            
+                request_body["system"] = system_prompt
+
             response = requests.post(
                 f"{self.base_url}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": full_prompt,
-                    "stream": False,
-                    "options": {
-                        "temperature": kwargs.get("temperature", 0.7)
-                    }
-                },
+                json=request_body,
                 timeout=60
             )
             response.raise_for_status()
@@ -246,9 +260,17 @@ class SimpleLLMConfigOpenAI:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model": (["gpt-4o-mini", "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo"], {"default": "gpt-3.5-turbo"}),
+                "model": ([
+                    "gpt-4.1-nano",
+                    "gpt-4.1-mini",
+                    "gpt-4.1",
+                    "gpt-4o-mini",
+                    "gpt-4o",
+                    "o4-mini",
+                    "o3-mini",
+                ], {"default": "gpt-4.1-mini"}),
                 "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.1}),
-                "max_tokens": ("INT", {"default": 1000, "min": 1, "max": 4000}),
+                "max_tokens": ("INT", {"default": 2000, "min": 1, "max": 16384}),
             },
             "optional": {
                 "api_key": ("STRING", {"default": "", "multiline": False}),
@@ -277,14 +299,14 @@ class SimpleLLMConfigClaude:
         return {
             "required": {
                 "model": ([
-                    "claude-3-opus-20240229",
-                    "claude-3-sonnet-20240229", 
-                    "claude-3-haiku-20240307",
-                    "claude-2.1",
-                    "claude-2.0"
-                ], {"default": "claude-3-sonnet-20240229"}),
+                    "claude-sonnet-4-6",
+                    "claude-haiku-4-5-20251001",
+                    "claude-opus-4-6",
+                    "claude-3-5-sonnet-20241022",
+                    "claude-3-5-haiku-20241022",
+                ], {"default": "claude-sonnet-4-6"}),
                 "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.1}),
-                "max_tokens": ("INT", {"default": 1000, "min": 1, "max": 4000}),
+                "max_tokens": ("INT", {"default": 2000, "min": 1, "max": 16384}),
             },
             "optional": {
                 "api_key": ("STRING", {"default": "", "multiline": False}),
@@ -313,13 +335,14 @@ class SimpleLLMConfigGemini:
         return {
             "required": {
                 "model": ([
-                    "gemini-pro",
-                    "gemini-pro-vision",
-                    "gemini-1.5-pro-latest",
-                    "gemini-1.5-flash-latest"
-                ], {"default": "gemini-pro"}),
-                "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 1.0, "step": 0.1}),
-                "max_tokens": ("INT", {"default": 1000, "min": 1, "max": 8192}),
+                    "gemini-2.5-flash",
+                    "gemini-2.5-pro",
+                    "gemini-2.0-flash",
+                    "gemini-1.5-flash",
+                    "gemini-1.5-pro",
+                ], {"default": "gemini-2.5-flash"}),
+                "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.1}),
+                "max_tokens": ("INT", {"default": 2000, "min": 1, "max": 65536}),
             },
             "optional": {
                 "api_key": ("STRING", {"default": "", "multiline": False}),
@@ -350,19 +373,21 @@ class SimpleLLMConfigOllama:
                 "model": ("STRING", {"default": "llama3", "multiline": False}),
                 "base_url": ("STRING", {"default": "http://localhost:11434", "multiline": False}),
                 "temperature": ("FLOAT", {"default": 0.7, "min": 0.0, "max": 2.0, "step": 0.1}),
+                "max_tokens": ("INT", {"default": 2000, "min": 1, "max": 16384}),
             }
         }
-    
+
     RETURN_TYPES = ("LLM_CONFIG",)
     FUNCTION = "create_config"
     CATEGORY = "NS/LLM/Config"
-    
-    def create_config(self, model, base_url, temperature):
+
+    def create_config(self, model, base_url, temperature, max_tokens):
         config = {
             "driver": "ollama",
             "model": model,
             "base_url": base_url,
-            "temperature": temperature
+            "temperature": temperature,
+            "max_tokens": max_tokens
         }
         return (config,)
 
@@ -684,8 +709,8 @@ print("SimpleLLM Nodes Loaded Successfully")
 print("=" * 60)
 print(f"Loaded {len(NODE_CLASS_MAPPINGS)} nodes in NS/LLM category")
 print("Available LLM Providers:")
-print("  - OpenAI GPT (gpt-3.5-turbo, gpt-4, gpt-4-turbo)")
-print("  - Anthropic Claude (claude-2, claude-3)")
-print("  - Google Gemini (gemini-pro, gemini-1.5)")
+print("  - OpenAI GPT (gpt-4.1, gpt-4o, o3-mini, o4-mini)")
+print("  - Anthropic Claude (claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5)")
+print("  - Google Gemini (gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash)")
 print("  - Ollama (local models)")
 print("=" * 60)

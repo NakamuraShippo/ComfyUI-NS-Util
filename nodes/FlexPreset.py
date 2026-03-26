@@ -537,13 +537,15 @@ class NS_FlexPreset:
             success = await instance._delete_value(yaml_file, title, key_name)
             if success:
                 # Force refresh dynamic outputs
-                instance.__class__.dynamic_output_types(yaml_file, title, title)
-                
+                outputs, names = instance.__class__.dynamic_output_types(yaml_file, title, title)
+
                 instance.refresh_enums()
-                # Send updated widget data after delete
+                # Send updated widget data after delete (include outputs for inline rebuild)
                 updated_data = instance._get_prompt_data(yaml_file, title)
-                updated_data["refresh_outputs"] = True  # Deletion needs output refresh
-                updated_data["node_id"] = node_id  # Include node ID
+                updated_data["refresh_outputs"] = True
+                updated_data["node_id"] = node_id
+                updated_data["outputs"] = outputs
+                updated_data["output_names"] = names
                 instance._ws_emit("ns_flexpreset_set_widgets", updated_data)
             
             # B1: Return proper Response object
@@ -642,11 +644,13 @@ class NS_FlexPreset:
                     added += 1
 
             if added > 0:
-                instance.__class__.dynamic_output_types(yaml_file, title, title)
+                outputs, names = instance.__class__.dynamic_output_types(yaml_file, title, title)
                 instance.refresh_enums()
                 updated_data = instance._get_prompt_data(yaml_file, title)
                 updated_data["refresh_outputs"] = True
                 updated_data["node_id"] = node_id
+                updated_data["outputs"] = outputs
+                updated_data["output_names"] = names
                 instance._ws_emit("ns_flexpreset_set_widgets", updated_data)
 
             return web.json_response({"success": True, "added": added})
