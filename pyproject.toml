@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-ns-util"
 description = "Flexible configuration management with YAML presets and LLM and Graphic Filters"
-version = "0.2.0"
+version = "0.3.0"
 license = { file = "LICENSE.txt" }
 
 [project.urls]
