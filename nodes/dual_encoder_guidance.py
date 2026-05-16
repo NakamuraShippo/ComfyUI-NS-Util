@@ -1,11 +1,16 @@
 import math
+
 import torch
 
+
+# ============================================
+# Base Text Encode (L+G 分離)
+# ============================================
 
 class NS_DualEncoderTextEncode:
     """SDXLの2つのCLIPエンコーダに別々のプロンプトを入力し、
     content(被写体・構図)とstyle(画風・ライティング)の分離制御を実現する。
-    content_blend_G で content 情報を G encoder にも流す比率を調整可能。"""
+    L encoder に content、G encoder に style を割り当てる。"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -14,15 +19,11 @@ class NS_DualEncoderTextEncode:
                 "clip": ("CLIP",),
                 "prompt_content": ("STRING", {
                     "multiline": True, "dynamicPrompts": True,
-                    "tooltip": "Content prompt (subject, composition, color) -> CLIP ViT-L + blended to ViT-bigG",
+                    "tooltip": "Content prompt (subject, composition, color) -> CLIP ViT-L",
                 }),
                 "prompt_style": ("STRING", {
                     "multiline": True, "dynamicPrompts": True,
                     "tooltip": "Style prompt (aesthetics, lighting, medium) -> OpenCLIP ViT-bigG",
-                }),
-                "content_blend_G": ("FLOAT", {
-                    "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
-                    "tooltip": "How much content prompt influences G encoder & pooled output. 0.0=G is pure style, 1.0=G is pure content. Pooled output uses accelerated curve for stronger content influence.",
                 }),
             }
         }
@@ -43,71 +44,94 @@ class NS_DualEncoderTextEncode:
             tokens_g["g"] += empty["g"]
         return tokens_g
 
-    def encode(self, clip, prompt_content, prompt_style, content_blend_G):
+    def encode(self, clip, prompt_content, prompt_style):
         # Non-SDXL fallback
         tokens_test = clip.tokenize(prompt_content)
         if "g" not in tokens_test:
             print("[NS-DualEncoderTextEncode] Warning: Non-SDXL CLIP detected, using prompt_content only.")
             return (clip.encode_from_tokens_scheduled(tokens_test),)
 
-        # Encoding A: G=style, L=content（分離エンコード）
+        # Encoding 1: L=content, G=style（分離エンコード → G hidden states を使用）
         tokens_style = self._tokenize_and_balance(clip, prompt_content, prompt_style)
         cond_style = clip.encode_from_tokens_scheduled(tokens_style)
 
-        # blend=0 なら分離エンコードそのまま
-        if content_blend_G <= 0.0:
-            return (cond_style,)
-
-        # Encoding B: G=content, L=content（標準エンコード相当）
+        # Encoding 2: L=content, G=content（統一エンコード → pooled_output を使用）
         tokens_content = self._tokenize_and_balance(clip, prompt_content, prompt_content)
         cond_content = clip.encode_from_tokens_scheduled(tokens_content)
 
-        # blend=1 なら content エンコードそのまま
-        if content_blend_G >= 1.0:
-            return (cond_content,)
-
-        # G 成分 (768:2048) と pooled_output をブレンド
-        # pooled output は影響力が大きいため、二次曲線で content 寄りに加速
-        # blend=0.3 → hidden=0.3, pooled=0.51
-        # blend=0.5 → hidden=0.5, pooled=0.75
-        # blend=0.7 → hidden=0.7, pooled=0.91
-        blend = content_blend_G
-        pooled_blend = 1.0 - (1.0 - blend) ** 2
+        # pooled_output を content 側から取得して差し替え
+        # G hidden states は style、pooled_output は content という組み合わせ
         out = []
         for i, (tensor_s, dict_s) in enumerate(cond_style):
+            new_dict = dict_s.copy()
             if i < len(cond_content):
-                tensor_c, dict_c = cond_content[i]
-                blended_tensor = tensor_s.clone()
-                # G hidden states: 線形ブレンド
-                if blended_tensor.shape[-1] >= 2048:
-                    blended_tensor[..., 768:2048] = (
-                        (1 - blend) * tensor_s[..., 768:2048]
-                        + blend * tensor_c[..., 768:2048]
-                    )
-                new_dict = dict_s.copy()
-                # pooled_output: 二次曲線ブレンド（content 寄りに加速）
-                if "pooled_output" in dict_s and "pooled_output" in dict_c:
-                    new_dict["pooled_output"] = (
-                        (1 - pooled_blend) * dict_s["pooled_output"]
-                        + pooled_blend * dict_c["pooled_output"]
-                    )
-                out.append((blended_tensor, new_dict))
-            else:
-                out.append((tensor_s, dict_s.copy()))
+                _, dict_c = cond_content[i]
+                if "pooled_output" in dict_c:
+                    new_dict["pooled_output"] = dict_c["pooled_output"]
+            out.append((tensor_s, new_dict))
 
         return (out,)
 
 
-def _scale_lg_components(cond_tensor, scale_L, scale_G, normalize):
-    """Conditioning tensor の L/G 成分をスケーリングする共通処理"""
-    c = cond_tensor.clone()
+# ============================================
+# Refiner Text Encode (G 単体 + aesthetic_score)
+# ============================================
 
-    if c.shape[-1] < 2048:
-        return c  # non-SDXL: skip
+class NS_RefinerTextEncode:
+    """SDXL Refiner 用テキストエンコード。
+    Refiner CLIP (OpenCLIP ViT-bigG 単体) に最適化。
+    aesthetic_score を conditioning に付与する。"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "clip": ("CLIP",),
+                "prompt": ("STRING", {
+                    "multiline": True, "dynamicPrompts": True,
+                    "tooltip": "Refiner prompt -> OpenCLIP ViT-bigG",
+                }),
+                "aesthetic_score": ("FLOAT", {
+                    "default": 6.0, "min": 1.0, "max": 10.0, "step": 0.5,
+                    "tooltip": "Aesthetic score for Refiner conditioning (higher = more aesthetic)",
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING",)
+    FUNCTION = "encode"
+    CATEGORY = "NS/Conditioning"
+
+    def encode(self, clip, prompt, aesthetic_score):
+        tokens = clip.tokenize(prompt)
+        cond = clip.encode_from_tokens_scheduled(tokens)
+
+        # aesthetic_score を各 conditioning エントリに付与
+        out = []
+        for tensor, cond_dict in cond:
+            d = cond_dict.copy()
+            d["aesthetic_score"] = aesthetic_score
+            out.append((tensor, d))
+
+        return (out,)
+
+
+# ============================================
+# 共通スケーリング処理
+# ============================================
+
+def _scale_base_components(cond_tensor, scale_L, scale_G, normalize):
+    """Base conditioning tensor (2048d: L=768 + G=1280) の L/G 成分をスケーリング"""
+    c = cond_tensor.clone()
+    dim = c.shape[-1]
+
+    if dim < 2048:
+        print("[NS-DualEncoderGuidanceScale] Warning: Non-Base conditioning detected, skipping.")
+        return c
 
     c_L = c[..., :768]
     c_G = c[..., 768:2048]
-    c_rest = c[..., 2048:] if c.shape[-1] > 2048 else None
+    c_rest = c[..., 2048:] if dim > 2048 else None
 
     orig_norm = c[..., :2048].norm(dim=-1, keepdim=True).clamp(min=1e-8)
 
@@ -126,9 +150,32 @@ def _scale_lg_components(cond_tensor, scale_L, scale_G, normalize):
     return c
 
 
+def _scale_refiner_components(cond_tensor, scale_G, normalize):
+    """Refiner conditioning tensor (1280d: G のみ) の G 成分をスケーリング"""
+    c = cond_tensor.clone()
+    dim = c.shape[-1]
+
+    if dim < 1280:
+        print("[NS-RefinerGuidanceScale] Warning: Unexpected conditioning dimension, skipping.")
+        return c
+
+    orig_norm = c[..., :1280].norm(dim=-1, keepdim=True).clamp(min=1e-8)
+
+    c[..., :1280] = c[..., :1280] * scale_G
+
+    if normalize:
+        new_norm = c[..., :1280].norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        c[..., :1280] = c[..., :1280] * (orig_norm / new_norm)
+
+    return c
+
+
+# ============================================
+# Base Guidance Scale (L+G)
+# ============================================
+
 class NS_DualEncoderGuidanceScale:
-    """Conditioning の ViT-L / ViT-bigG 成分に異なるスケールを適用する。
-    blend_factor で元の conditioning との滑らかなブレンドが可能。"""
+    """Base conditioning の ViT-L / ViT-bigG 成分に異なるスケールを適用する。"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -136,20 +183,16 @@ class NS_DualEncoderGuidanceScale:
             "required": {
                 "conditioning": ("CONDITIONING",),
                 "scale_L_content": ("FLOAT", {
-                    "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.05,
-                    "tooltip": "CLIP ViT-L (content prompt) component scale",
+                    "default": 1.0, "min": 0.1, "max": 2.0, "step": 0.01,
+                    "tooltip": "CLIP ViT-L (content) scale",
                 }),
                 "scale_G_style": ("FLOAT", {
-                    "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.05,
-                    "tooltip": "OpenCLIP ViT-bigG (style prompt) component scale",
+                    "default": 1.0, "min": 0.1, "max": 2.0, "step": 0.01,
+                    "tooltip": "OpenCLIP ViT-bigG (style) scale",
                 }),
-                "blend_factor": ("FLOAT", {
-                    "default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05,
-                    "tooltip": "0.0 = no change, 1.0 = full scale applied",
-                }),
-                "normalize": (["enable", "disable"], {
-                    "default": "enable",
-                    "tooltip": "Re-normalize after scaling to preserve overall magnitude",
+                "normalize": (["disable", "enable"], {
+                    "default": "disable",
+                    "tooltip": "Re-normalize after scaling. L/G の比率のみ変化させたい場合に有効。",
                 }),
             }
         }
@@ -158,27 +201,64 @@ class NS_DualEncoderGuidanceScale:
     FUNCTION = "apply_scale"
     CATEGORY = "NS/Conditioning"
 
-    def apply_scale(self, conditioning, scale_L_content, scale_G_style, blend_factor, normalize):
-        if blend_factor == 0.0 or (scale_L_content == 1.0 and scale_G_style == 1.0):
+    def apply_scale(self, conditioning, scale_L_content, scale_G_style, normalize):
+        if scale_L_content == 1.0 and scale_G_style == 1.0:
             return (conditioning,)
 
         do_normalize = normalize == "enable"
-        # Compute effective scales with blend
-        eff_L = 1.0 + (scale_L_content - 1.0) * blend_factor
-        eff_G = 1.0 + (scale_G_style - 1.0) * blend_factor
-
         out = []
         for cond_tensor, cond_dict in conditioning:
-            c = _scale_lg_components(cond_tensor, eff_L, eff_G, do_normalize)
+            c = _scale_base_components(cond_tensor, scale_L_content, scale_G_style, do_normalize)
             out.append((c, cond_dict.copy()))
 
         return (out,)
 
 
+# ============================================
+# Refiner Guidance Scale (G のみ)
+# ============================================
+
+class NS_RefinerGuidanceScale:
+    """Refiner conditioning の ViT-bigG 成分にスケールを適用する。"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "conditioning": ("CONDITIONING",),
+                "scale_G": ("FLOAT", {
+                    "default": 1.0, "min": 0.1, "max": 2.0, "step": 0.01,
+                    "tooltip": "OpenCLIP ViT-bigG scale",
+                }),
+                "normalize": (["disable", "enable"], {
+                    "default": "disable",
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING",)
+    FUNCTION = "apply_scale"
+    CATEGORY = "NS/Conditioning"
+
+    def apply_scale(self, conditioning, scale_G, normalize):
+        if scale_G == 1.0:
+            return (conditioning,)
+
+        do_normalize = normalize == "enable"
+        out = []
+        for cond_tensor, cond_dict in conditioning:
+            c = _scale_refiner_components(cond_tensor, scale_G, do_normalize)
+            out.append((c, cond_dict.copy()))
+
+        return (out,)
+
+
+# ============================================
+# Base Schedule (L+G)
+# ============================================
+
 class NS_DualEncoderSchedule:
-    """L/G スケールをサンプリング進行に応じて動的に変化させる。
-    ComfyUI の conditioning scheduling を利用して、
-    ステップごとに異なる L/G バランスを適用する。"""
+    """Base 用: L/G スケールをサンプリング進行に応じて動的に変化させる。"""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -186,27 +266,35 @@ class NS_DualEncoderSchedule:
             "required": {
                 "conditioning": ("CONDITIONING",),
                 "start_scale_L_content": ("FLOAT", {
-                    "default": 0.7, "min": 0.0, "max": 3.0, "step": 0.05,
-                    "tooltip": "ViT-L (content prompt) scale at sampling start",
+                    "default": 0.7, "min": 0.1, "max": 2.0, "step": 0.01,
+                    "tooltip": "ViT-L (content) scale at schedule start",
                 }),
                 "end_scale_L_content": ("FLOAT", {
-                    "default": 1.3, "min": 0.0, "max": 3.0, "step": 0.05,
-                    "tooltip": "ViT-L (content prompt) scale at sampling end",
+                    "default": 1.3, "min": 0.1, "max": 2.0, "step": 0.01,
+                    "tooltip": "ViT-L (content) scale at schedule end",
                 }),
                 "start_scale_G_style": ("FLOAT", {
-                    "default": 1.3, "min": 0.0, "max": 3.0, "step": 0.05,
-                    "tooltip": "ViT-bigG (style prompt) scale at sampling start",
+                    "default": 1.3, "min": 0.1, "max": 2.0, "step": 0.01,
+                    "tooltip": "ViT-bigG (style) scale at schedule start",
                 }),
                 "end_scale_G_style": ("FLOAT", {
-                    "default": 0.7, "min": 0.0, "max": 3.0, "step": 0.05,
-                    "tooltip": "ViT-bigG (style prompt) scale at sampling end",
+                    "default": 0.7, "min": 0.1, "max": 2.0, "step": 0.01,
+                    "tooltip": "ViT-bigG (style) scale at schedule end",
+                }),
+                "schedule_start": ("FLOAT", {
+                    "default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Schedule range start (0.0=sampling start)",
+                }),
+                "schedule_end": ("FLOAT", {
+                    "default": 0.8, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Schedule range end. Base は通常 0.8 まで。",
                 }),
                 "segments": ("INT", {
                     "default": 5, "min": 2, "max": 20,
                     "tooltip": "Number of scheduling segments",
                 }),
-                "normalize": (["enable", "disable"], {
-                    "default": "enable",
+                "normalize": (["disable", "enable"], {
+                    "default": "disable",
                 }),
                 "interpolation": (["linear", "cosine"],),
             }
@@ -217,22 +305,29 @@ class NS_DualEncoderSchedule:
     CATEGORY = "NS/Conditioning"
 
     def schedule(self, conditioning, start_scale_L_content, end_scale_L_content,
-                 start_scale_G_style, end_scale_G_style, segments, normalize, interpolation):
+                 start_scale_G_style, end_scale_G_style, schedule_start, schedule_end,
+                 segments, normalize, interpolation):
         do_normalize = normalize == "enable"
+
+        if schedule_start >= schedule_end:
+            return (conditioning,)
+
+        range_span = schedule_end - schedule_start
         out = []
 
         for seg_idx in range(segments):
             t = seg_idx / (segments - 1) if segments > 1 else 0.0
             if interpolation == "cosine":
                 t = (1 - math.cos(t * math.pi)) / 2
-            start_pct = seg_idx / segments
-            end_pct = (seg_idx + 1) / segments
+
+            start_pct = schedule_start + (seg_idx / segments) * range_span
+            end_pct = schedule_start + ((seg_idx + 1) / segments) * range_span
 
             scale_L = start_scale_L_content + (end_scale_L_content - start_scale_L_content) * t
             scale_G = start_scale_G_style + (end_scale_G_style - start_scale_G_style) * t
 
             for cond_tensor, cond_dict in conditioning:
-                c = _scale_lg_components(cond_tensor, scale_L, scale_G, do_normalize)
+                c = _scale_base_components(cond_tensor, scale_L, scale_G, do_normalize)
                 d = cond_dict.copy()
                 d["start_percent"] = start_pct
                 d["end_percent"] = end_pct
@@ -241,14 +336,97 @@ class NS_DualEncoderSchedule:
         return (out,)
 
 
+# ============================================
+# Refiner Schedule (G のみ)
+# ============================================
+
+class NS_RefinerSchedule:
+    """Refiner 用: G スケールをサンプリング進行に応じて動的に変化させる。"""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "conditioning": ("CONDITIONING",),
+                "start_scale_G": ("FLOAT", {
+                    "default": 1.2, "min": 0.1, "max": 2.0, "step": 0.01,
+                    "tooltip": "ViT-bigG scale at schedule start",
+                }),
+                "end_scale_G": ("FLOAT", {
+                    "default": 0.8, "min": 0.1, "max": 2.0, "step": 0.01,
+                    "tooltip": "ViT-bigG scale at schedule end",
+                }),
+                "schedule_start": ("FLOAT", {
+                    "default": 0.8, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Schedule range start. Refiner は通常 0.8 から。",
+                }),
+                "schedule_end": ("FLOAT", {
+                    "default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                    "tooltip": "Schedule range end (1.0=sampling end)",
+                }),
+                "segments": ("INT", {
+                    "default": 3, "min": 2, "max": 20,
+                    "tooltip": "Number of scheduling segments",
+                }),
+                "normalize": (["disable", "enable"], {
+                    "default": "disable",
+                }),
+                "interpolation": (["linear", "cosine"],),
+            }
+        }
+
+    RETURN_TYPES = ("CONDITIONING",)
+    FUNCTION = "schedule"
+    CATEGORY = "NS/Conditioning"
+
+    def schedule(self, conditioning, start_scale_G, end_scale_G,
+                 schedule_start, schedule_end, segments, normalize, interpolation):
+        do_normalize = normalize == "enable"
+
+        if schedule_start >= schedule_end:
+            return (conditioning,)
+
+        range_span = schedule_end - schedule_start
+        out = []
+
+        for seg_idx in range(segments):
+            t = seg_idx / (segments - 1) if segments > 1 else 0.0
+            if interpolation == "cosine":
+                t = (1 - math.cos(t * math.pi)) / 2
+
+            start_pct = schedule_start + (seg_idx / segments) * range_span
+            end_pct = schedule_start + ((seg_idx + 1) / segments) * range_span
+
+            scale_G = start_scale_G + (end_scale_G - start_scale_G) * t
+
+            for cond_tensor, cond_dict in conditioning:
+                c = _scale_refiner_components(cond_tensor, scale_G, do_normalize)
+                d = cond_dict.copy()
+                d["start_percent"] = start_pct
+                d["end_percent"] = end_pct
+                out.append((c, d))
+
+        return (out,)
+
+
+# ============================================
+# Node Registration
+# ============================================
+
 NODE_CLASS_MAPPINGS = {
     "NS-DualEncoderTextEncode": NS_DualEncoderTextEncode,
+    "NS-RefinerTextEncode": NS_RefinerTextEncode,
     "NS-DualEncoderGuidanceScale": NS_DualEncoderGuidanceScale,
+    "NS-RefinerGuidanceScale": NS_RefinerGuidanceScale,
     "NS-DualEncoderSchedule": NS_DualEncoderSchedule,
+    "NS-RefinerSchedule": NS_RefinerSchedule,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "NS-DualEncoderTextEncode": "NS Dual Encoder Text Encode",
+    "NS-RefinerTextEncode": "NS Refiner Text Encode",
     "NS-DualEncoderGuidanceScale": "NS Dual Encoder Guidance Scale",
+    "NS-RefinerGuidanceScale": "NS Refiner Guidance Scale",
     "NS-DualEncoderSchedule": "NS Dual Encoder Schedule",
+    "NS-RefinerSchedule": "NS Refiner Schedule",
 }
